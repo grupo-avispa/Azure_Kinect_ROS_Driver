@@ -881,7 +881,19 @@ void K4AROSDevice::framePublisherThread()
 
   while (running_ && rclcpp::ok()) {
     if (k4a_device_) {
-      if (!k4a_device_.get_capture(&capture, waitTime)) {
+      bool got_capture = false;
+      try {
+        got_capture = k4a_device_.get_capture(&capture, waitTime);
+      } catch (const k4a::error & e) {
+        // A hardware-level capture failure (e.g. a corrupted USB frame breaking the
+        // sensor's internal MJPEG decode) surfaces here as an exception rather than
+        // through the plain timeout path below; treat it as recoverable and retry on
+        // the next iteration instead of letting the node crash.
+        RCLCPP_ERROR(this->get_logger(), "Failed to get capture, retrying: %s", e.what());
+        loop_rate.sleep();
+        continue;
+      }
+      if (!got_capture) {
         RCLCPP_FATAL(this->get_logger(), "Failed to poll cameras: node cannot continue.");
         rclcpp::shutdown();
         return;
