@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -40,7 +41,7 @@ using namespace std::chrono_literals;
  */
 class DriverNodeTest : public ::testing::Test
 {
-protected:
+public:
   /** @brief Creates the shared state of the fake source. */
   void SetUp() override
   {
@@ -406,6 +407,91 @@ TEST_F(DriverNodeTest, AutostartActivatesTheNode)
 
   EXPECT_TRUE(waitFor([&]() { return stateId() == State::PRIMARY_STATE_ACTIVE; }));
   EXPECT_TRUE(waitFor([&]() { return state_->captures > 3; }));
+}
+
+/**
+ * @brief Collects the depth images that two subscribers of the probe node receive.
+ *
+ * Both subscribers take the message by shared pointer, so with intra-process communication they
+ * get the very same object, and over the network each one gets its own copy.
+ *
+ * @param test The fixture.
+ * @param intra_process Whether the nodes use intra-process communication.
+ * @param same The number of stamps for which both subscribers got the same object.
+ * @param different The number of stamps for which they got different objects.
+ */
+static void compareSubscribers(DriverNodeTest& test, bool intra_process, int& same, int& different)
+{
+  test.makeNode({}, intra_process);
+  using Image = sensor_msgs::msg::Image;
+  std::mutex mutex;
+  // The messages are kept alive, otherwise the memory of one could be reused for the next
+  std::map<int64_t, std::vector<Image::ConstSharedPtr>> received;
+  auto record = [&](Image::ConstSharedPtr msg)
+  {
+    std::lock_guard<std::mutex> guard(mutex);
+    const int64_t stamp = rclcpp::Time(msg->header.stamp).nanoseconds();
+    if (received.size() < 12 || received.count(stamp) > 0)
+    {
+      received[stamp].push_back(msg);
+    }
+  };
+  auto first = test.probe_->create_subscription<Image>("depth/image_raw", 10, record);
+  auto second = test.probe_->create_subscription<Image>("depth/image_raw", 10, record);
+
+  ASSERT_EQ(test.node_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(test.node_->activate().id(), State::PRIMARY_STATE_ACTIVE);
+  test.startSpinning();
+
+  ASSERT_TRUE(DriverNodeTest::waitFor(
+    [&]()
+    {
+      std::lock_guard<std::mutex> guard(mutex);
+      int complete = 0;
+      for (const auto& [stamp, pointers] : received)
+      {
+        complete += pointers.size() == 2 ? 1 : 0;
+      }
+      return complete >= 5;
+    }));
+
+  std::lock_guard<std::mutex> guard(mutex);
+  same = 0;
+  different = 0;
+  for (const auto& [stamp, pointers] : received)
+  {
+    if (pointers.size() == 2)
+    {
+      (pointers[0].get() == pointers[1].get() ? same : different)++;
+    }
+  }
+}
+
+/**
+ * @brief Within a process with intra-process communication the subscribers share the message.
+ */
+TEST_F(DriverNodeTest, IntraProcessSubscribersShareTheSameMessage)
+{
+  int same = 0;
+  int different = 0;
+  compareSubscribers(*this, true, same, different);
+
+  EXPECT_GE(same, 5);
+  EXPECT_EQ(different, 0);
+}
+
+/**
+ * @brief Without intra-process communication each subscriber gets its own copy, which shows that
+ * the previous test tells the two cases apart.
+ */
+TEST_F(DriverNodeTest, WithoutIntraProcessEachSubscriberGetsItsOwnCopy)
+{
+  int same = 0;
+  int different = 0;
+  compareSubscribers(*this, false, same, different);
+
+  EXPECT_EQ(same, 0);
+  EXPECT_GE(different, 5);
 }
 
 /**
