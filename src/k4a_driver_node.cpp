@@ -44,7 +44,13 @@ K4ADriverNode::K4ADriverNode(const rclcpp::NodeOptions& options, SourceFactory s
   , params_(this->get_logger())
   , source_factory_(std::move(source_factory))
   , calibration_data_(std::make_unique<K4ACalibrationTransformData>(this))
+  , updater_(this)
 {
+  updater_.setHardwareID("azure_kinect");
+  updater_.add("K4A device", &diagnostics_, &DriverDiagnostics::deviceStatus);
+  updater_.add("K4A capture rate", &diagnostics_, &DriverDiagnostics::captureRateStatus);
+  updater_.add("K4A IMU rate", &diagnostics_, &DriverDiagnostics::imuRateStatus);
+
   declareParameters();
   readParameters();
 
@@ -142,6 +148,12 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_configure(const rclcpp_lifecycle
   createPublishers();
   clock_.reset();
 
+  const CaptureSource::DeviceInfo info = source_->deviceInfo();
+  updater_.setHardwareID(info.serial_number.empty() ? "azure_kinect" : info.serial_number);
+  diagnostics_.configured(
+    info, source_->description(), params_.fps,
+    static_cast<double>(IMU_MAX_RATE) / (IMU_MAX_RATE / params_.imu_rate_target));
+
   return CallbackReturn::SUCCESS;
 }
 
@@ -158,6 +170,8 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_activate(const rclcpp_lifecycle:
     return CallbackReturn::FAILURE;
   }
 
+  diagnostics_.setStreaming(true);
+  next_temperature_usec_ = 0;
   startThreads();
 
   // The base class activates the publishers, which only publish while the node is active
@@ -167,6 +181,7 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_activate(const rclcpp_lifecycle:
 K4ADriverNode::CallbackReturn K4ADriverNode::on_deactivate(const rclcpp_lifecycle::State& state)
 {
   stopThreads();
+  diagnostics_.setStreaming(false);
   if (source_)
   {
     RCLCPP_INFO(this->get_logger(), "Stopping the source");
@@ -179,6 +194,7 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_deactivate(const rclcpp_lifecycl
 K4ADriverNode::CallbackReturn K4ADriverNode::on_cleanup(const rclcpp_lifecycle::State&)
 {
   releaseSource();
+  diagnostics_.unconfigured();
   destroyPublishers();
   return CallbackReturn::SUCCESS;
 }
@@ -187,6 +203,7 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_shutdown(const rclcpp_lifecycle:
 {
   stopThreads();
   releaseSource();
+  diagnostics_.unconfigured();
   destroyPublishers();
   return CallbackReturn::SUCCESS;
 }
@@ -195,6 +212,7 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_error(const rclcpp_lifecycle::St
 {
   stopThreads();
   releaseSource();
+  diagnostics_.unconfigured();
   destroyPublishers();
   return CallbackReturn::SUCCESS;
 }
@@ -202,6 +220,7 @@ K4ADriverNode::CallbackReturn K4ADriverNode::on_error(const rclcpp_lifecycle::St
 void K4ADriverNode::fail(const std::string& reason)
 {
   RCLCPP_ERROR_STREAM(this->get_logger(), reason);
+  diagnostics_.setError(reason);
   failed_ = true;
   if (params_.shutdown_on_stop)
   {
@@ -372,6 +391,7 @@ void K4ADriverNode::createPublishers()
   }
 
   imu_publisher_ = createPublisher<sensor_msgs::msg::Imu>("imu", 200);
+  temperature_publisher_ = createPublisher<sensor_msgs::msg::Temperature>("temperature", 10);
 
   if (params_.point_cloud || params_.rgb_point_cloud)
   {
@@ -402,6 +422,7 @@ void K4ADriverNode::destroyPublishers()
   rgb_to_depth_publisher_.reset();
   rgb_to_depth_info_publisher_.reset();
   imu_publisher_.reset();
+  temperature_publisher_.reset();
   point_cloud_publisher_.reset();
 #if defined(K4A_BODY_TRACKING)
   body_marker_publisher_.reset();
@@ -446,6 +467,7 @@ void K4ADriverNode::updateClock(const k4a::capture& capture)
   if (clock_.update(image.get_device_timestamp(), image.get_system_timestamp()) ==
       ClockSynchronizer::UpdateResult::kSnapped)
   {
+    diagnostics_.clockResynchronized();
     RCLCPP_WARN_STREAM(this->get_logger(),
                        "Initializing or re-initializing the device to realtime offset: "
                          << clock_.toRealtime(std::chrono::microseconds(0)).count() << " ns");
@@ -492,6 +514,7 @@ void K4ADriverNode::captureThread()
       return;
     }
 
+    diagnostics_.captureReceived();
     const std::chrono::microseconds timestamp = captureTimestamp(capture);
     if (status == CaptureSource::Status::kRestarted)
     {
@@ -514,8 +537,14 @@ void K4ADriverNode::captureThread()
     {
       consecutive_failures = 0;
     }
-    else if (++consecutive_failures >= kMaxConsecutiveFrameFailures)
+    else
     {
+      diagnostics_.captureFailed();
+      if (++consecutive_failures < kMaxConsecutiveFrameFailures)
+      {
+        continue;
+      }
+
       RCLCPP_FATAL(this->get_logger(),
                    "Failed to render %d captures in a row: node cannot continue.",
                    consecutive_failures);
@@ -541,6 +570,8 @@ void K4ADriverNode::imuThread()
     CaptureSource::Status status = source_->nextImuSample(sample, kImuWaitTime);
     while (status == CaptureSource::Status::kOk)
     {
+      diagnostics_.imuSampleReceived(sample.temperature);
+      publishTemperature(sample);
       if (throttler.add(sample, output))
       {
         publishImuSample(output);
@@ -579,8 +610,29 @@ void K4ADriverNode::publishImuSample(const k4a_imu_sample_t& sample)
     if (imu_publisher_ && imu_publisher_->is_activated())
     {
       imu_publisher_->publish(std::move(msg));
+      diagnostics_.imuMessagePublished();
     }
   }
+}
+
+void K4ADriverNode::publishTemperature(const k4a_imu_sample_t& sample)
+{
+  // The temperature changes slowly, so one message per second of device time is enough
+  constexpr uint64_t kTemperaturePeriodUsec = 1000000;
+  if (sample.acc_timestamp_usec < next_temperature_usec_ || !temperature_publisher_ ||
+      !temperature_publisher_->is_activated())
+  {
+    return;
+  }
+  next_temperature_usec_ = sample.acc_timestamp_usec + kTemperaturePeriodUsec;
+
+  auto msg = std::make_unique<sensor_msgs::msg::Temperature>();
+  msg->header.frame_id = imu_frame_;
+  msg->header.stamp = toRosTime(std::chrono::microseconds(sample.acc_timestamp_usec));
+  msg->temperature = sample.temperature;
+  // The accuracy of the sensor is not known
+  msg->variance = 0.0;
+  temperature_publisher_->publish(std::move(msg));
 }
 }  // namespace azure_kinect_ros_driver
 

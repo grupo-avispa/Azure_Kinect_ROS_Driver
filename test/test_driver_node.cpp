@@ -16,11 +16,13 @@
 //
 #include <gtest/gtest.h>
 #include <lifecycle_msgs/msg/state.hpp>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/temperature.hpp>
 
 // Project headers
 //
@@ -465,6 +467,115 @@ static void compareSubscribers(DriverNodeTest& test, bool intra_process, int& sa
       (pointers[0].get() == pointers[1].get() ? same : different)++;
     }
   }
+}
+
+/**
+ * @brief Finds a diagnostic status of the driver by the name of its task.
+ *
+ * @param statuses The statuses received so far.
+ * @param task The name of the task, e.g. `K4A device`.
+ * @return The last status of that task, or nullptr if there is none.
+ */
+static const diagnostic_msgs::msg::DiagnosticStatus* findStatus(
+  const std::vector<diagnostic_msgs::msg::DiagnosticStatus>& statuses, const std::string& task)
+{
+  const diagnostic_msgs::msg::DiagnosticStatus* found = nullptr;
+  for (const auto& status : statuses)
+  {
+    if (status.name.find(task) != std::string::npos)
+    {
+      found = &status;
+    }
+  }
+  return found;
+}
+
+/**
+ * @brief A streaming driver reports its health on `/diagnostics` and the IMU temperature.
+ */
+TEST_F(DriverNodeTest, PublishesDiagnosticsAndTemperature)
+{
+  makeNode();
+  std::mutex mutex;
+  std::vector<diagnostic_msgs::msg::DiagnosticStatus> statuses;
+  std::vector<sensor_msgs::msg::Temperature::ConstSharedPtr> temperatures;
+  auto diagnostics_subscription =
+    probe_->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+      "/diagnostics", 10,
+      [&](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg)
+      {
+        std::lock_guard<std::mutex> guard(mutex);
+        statuses.insert(statuses.end(), msg->status.begin(), msg->status.end());
+      });
+  auto temperature_subscription = probe_->create_subscription<sensor_msgs::msg::Temperature>(
+    "temperature", 10,
+    [&](sensor_msgs::msg::Temperature::ConstSharedPtr msg)
+    {
+      std::lock_guard<std::mutex> guard(mutex);
+      temperatures.push_back(msg);
+    });
+
+  ASSERT_EQ(node_->configure().id(), State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(node_->activate().id(), State::PRIMARY_STATE_ACTIVE);
+  startSpinning();
+
+  // The fake IMU delivers one second of device time in about 0.6 s, so a few temperatures arrive
+  ASSERT_TRUE(waitFor(
+    [&]()
+    {
+      std::lock_guard<std::mutex> guard(mutex);
+      const auto* device = findStatus(statuses, "K4A device");
+      const auto* rate = findStatus(statuses, "K4A capture rate");
+      return temperatures.size() >= 2 && device != nullptr && rate != nullptr &&
+             device->level == diagnostic_msgs::msg::DiagnosticStatus::OK;
+    },
+    15s));
+
+  std::lock_guard<std::mutex> guard(mutex);
+  const auto* device = findStatus(statuses, "K4A device");
+  EXPECT_EQ(device->hardware_id, "FAKE");
+  EXPECT_EQ(device->message, "Streaming");
+  for (const auto& temperature : temperatures)
+  {
+    EXPECT_EQ(temperature->header.frame_id, "imu_link");
+    EXPECT_GE(temperature->temperature, 30.0);
+    EXPECT_LE(temperature->temperature, 31.0);
+  }
+  EXPECT_GT(rclcpp::Time(temperatures[1]->header.stamp),
+            rclcpp::Time(temperatures[0]->header.stamp));
+}
+
+/**
+ * @brief A failed configuration is reported as an error on `/diagnostics`.
+ */
+TEST_F(DriverNodeTest, DiagnosticsReportAFailedConfiguration)
+{
+  factory_fails_ = true;
+  makeNode();
+  std::mutex mutex;
+  std::vector<diagnostic_msgs::msg::DiagnosticStatus> statuses;
+  auto subscription = probe_->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+    "/diagnostics", 10,
+    [&](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg)
+    {
+      std::lock_guard<std::mutex> guard(mutex);
+      statuses.insert(statuses.end(), msg->status.begin(), msg->status.end());
+    });
+  startSpinning();
+  ASSERT_EQ(node_->configure().id(), State::PRIMARY_STATE_UNCONFIGURED);
+
+  ASSERT_TRUE(waitFor(
+    [&]()
+    {
+      std::lock_guard<std::mutex> guard(mutex);
+      const auto* device = findStatus(statuses, "K4A device");
+      return device != nullptr && device->level == diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+    },
+    10s));
+
+  std::lock_guard<std::mutex> guard(mutex);
+  EXPECT_NE(findStatus(statuses, "K4A device")->message.find("the source cannot be opened"),
+            std::string::npos);
 }
 
 /**

@@ -25,6 +25,8 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(diagnostic_updater REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -84,11 +86,12 @@ add_library(${PROJECT_NAME}_core STATIC
   src/device_source.cpp
   src/playback_source.cpp
   src/k4a_ros_device_params.cpp
+  src/driver_diagnostics.cpp
   )
 set_target_properties(${PROJECT_NAME}_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-ament_target_dependencies(${PROJECT_NAME}_core PUBLIC rclcpp sensor_msgs)
+ament_target_dependencies(${PROJECT_NAME}_core PUBLIC rclcpp sensor_msgs diagnostic_msgs diagnostic_updater)
 target_link_libraries(${PROJECT_NAME}_core PUBLIC ${K4A_LIBS})
 if(K4A_BODY_TRACKING_ENABLED)
   target_compile_definitions(${PROJECT_NAME}_core PUBLIC K4A_BODY_TRACKING)
@@ -168,6 +171,9 @@ if(BUILD_TESTING)
   target_include_directories(test_driver_node PRIVATE test)
   target_compile_definitions(test_driver_node PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/data")
+
+  ament_add_gtest(test_driver_diagnostics test/test_driver_diagnostics.cpp)
+  target_link_libraries(test_driver_diagnostics ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_clock_synchronizer test/test_clock_synchronizer.cpp)
   target_link_libraries(test_clock_synchronizer ${PROJECT_NAME}_core)

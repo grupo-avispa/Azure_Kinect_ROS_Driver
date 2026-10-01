@@ -15,6 +15,7 @@
 // Library headers
 //
 #include <k4a/k4a.h>
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <rclcpp_lifecycle/lifecycle_publisher.hpp>
@@ -34,6 +35,7 @@
 //
 #include "azure_kinect_ros_driver/capture_source.h"
 #include "azure_kinect_ros_driver/clock_synchronizer.h"
+#include "azure_kinect_ros_driver/driver_diagnostics.h"
 #include "azure_kinect_ros_driver/k4a_calibration_transform_data.h"
 #include "azure_kinect_ros_driver/k4a_conversions.h"
 #include "azure_kinect_ros_driver/k4a_ros_device_params.h"
@@ -292,6 +294,13 @@ private:
    */
   void publishImuSample(const k4a_imu_sample_t& sample);
 
+  /**
+   * @brief Publishes the temperature of the IMU, at most once per second of device time.
+   *
+   * @param sample The IMU sample that carries the temperature.
+   */
+  void publishTemperature(const k4a_imu_sample_t& sample);
+
   /** @brief The parameters. */
   K4AROSDeviceParams params_;
 
@@ -306,6 +315,15 @@ private:
 
   /** @brief Maps the device timestamps to the realtime clock. */
   ClockSynchronizer clock_;
+
+  /** @brief The figures of the health of the driver. */
+  DriverDiagnostics diagnostics_;
+
+  /** @brief Publishes `diagnostics_` on `/diagnostics`. */
+  diagnostic_updater::Updater updater_;
+
+  /** @brief Device time of the next temperature message, in microseconds. */
+  uint64_t next_temperature_usec_ = 0;
 
   /** @brief Unit of the depth images. */
   conversions::DepthUnit depth_unit_ = conversions::DepthUnit::kMillimeters;
@@ -370,6 +388,10 @@ private:
 
   /** @brief Publisher of the IMU samples. */
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
+
+  /** @brief Publisher of the temperature of the IMU. */
+  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Temperature>::SharedPtr
+    temperature_publisher_;
 
   /** @brief Publisher of the point cloud. */
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr
