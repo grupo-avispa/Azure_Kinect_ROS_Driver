@@ -22,7 +22,6 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/temperature.hpp>
 #include <k4a/k4a.hpp>
-#include <k4arecord/playback.hpp>
 
 #if defined(K4A_BODY_TRACKING)
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -31,6 +30,7 @@
 
 // Project headers
 //
+#include "azure_kinect_ros_driver/capture_source.h"
 #include "azure_kinect_ros_driver/clock_synchronizer.h"
 #include "azure_kinect_ros_driver/k4a_calibration_transform_data.h"
 #include "azure_kinect_ros_driver/k4a_ros_device_params.h"
@@ -104,9 +104,6 @@ class K4AROSDevice : public rclcpp::Node
 #endif
   void imuPublisherThread();
 
-  // Gets a timestap from one of the captures images
-  std::chrono::microseconds getCaptureTimestamp(const k4a::capture& capture);
-
   // Converts a k4a_image_t timestamp to a ros::Time object
   rclcpp::Time timestampToROS(const std::chrono::microseconds& k4a_timestamp_us);
 
@@ -152,13 +149,10 @@ class K4AROSDevice : public rclcpp::Node
   // Parameters
   K4AROSDeviceParams params_;
 
-  // K4A device
-  k4a::device k4a_device_;
   K4ACalibrationTransformData calibration_data_;
 
-  // K4A Recording
-  k4a::playback k4a_playback_handle_;
-  std::mutex k4a_playback_handle_mutex_;
+  // Where the captures and the IMU samples come from
+  std::unique_ptr<azure_kinect_ros_driver::CaptureSource> source_;
 
 #if defined(K4A_BODY_TRACKING)
   // Body tracker
@@ -172,13 +166,6 @@ class K4AROSDevice : public rclcpp::Node
 
   // Thread control
   std::atomic_bool running_{false};
-
-  // Last capture timestamp for synchronizing playback capture and imu thread
-  std::atomic_uint64_t last_capture_time_usec_;
-
-  // Last imu timestamp for synchronizing playback capture and imu thread
-  std::atomic_uint64_t last_imu_time_usec_;
-  std::atomic_bool imu_stream_end_of_file_;
 
   // Threads
   std::thread frame_publisher_thread_;

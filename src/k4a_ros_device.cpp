@@ -59,18 +59,15 @@ size_t subscriberCount(const image_transport::Publisher & publisher)
 K4AROSDevice::K4AROSDevice()
 : Node("k4a_ros_device_node"),
   params_(this->get_logger()),
-  k4a_device_(nullptr),
-  calibration_data_(this),
-  k4a_playback_handle_(nullptr),
 // clang-format off
 #if defined(K4A_BODY_TRACKING)
+  calibration_data_(this),
   k4abt_tracker_(nullptr),
-  k4abt_tracker_queue_size_(0),
+  k4abt_tracker_queue_size_(0)
+#else
+  calibration_data_(this)
 #endif
     // clang-format on
-  last_capture_time_usec_(0),
-  last_imu_time_usec_(0),
-  imu_stream_end_of_file_(false)
 {
   // Image topics are advertised through the free-function API, which does not take ownership of
   // this node (building a shared_ptr from `this` here would create a second control block).
@@ -103,152 +100,11 @@ K4AROSDevice::K4AROSDevice()
   RCLCPP_INFO(this->get_logger(), "K4A Parameters:");
   params_.Print();
 
-  if (params_.recording_file != "") {
-    RCLCPP_INFO(this->get_logger(), "Node is started in playback mode");
-    RCLCPP_INFO_STREAM(this->get_logger(), "Try to open recording file " << params_.recording_file);
-
-    // Open recording file and print its length
-    try {
-      k4a_playback_handle_ = k4a::playback::open(params_.recording_file.c_str());
-    } catch (const k4a::error & e) {
-      RCLCPP_ERROR_STREAM(this->get_logger(),
-        "Failed to open recording file " << params_.recording_file << ": " << e.what());
-      return;
-    }
-    auto recording_length = k4a_playback_handle_.get_recording_length();
-    RCLCPP_INFO_STREAM(this->get_logger(),
-      "Successfully openend recording file. Recording is "               <<
-      recording_length.count() / 1000000
-                                                                         <<
-      " seconds long");
-
-    // Get the recordings configuration to overwrite node parameters
-    k4a_record_configuration_t record_config = k4a_playback_handle_.get_record_configuration();
-
-    // Overwrite fps param with recording configuration for a correct loop rate in the frame publisher thread
-    switch (record_config.camera_fps) {
-      case K4A_FRAMES_PER_SECOND_5:
-        params_.fps = 5;
-        break;
-      case K4A_FRAMES_PER_SECOND_15:
-        params_.fps = 15;
-        break;
-      case K4A_FRAMES_PER_SECOND_30:
-        params_.fps = 30;
-        break;
-      default:
-        break;
-    }
-
-    // Disable color if the recording has no color track
-    if (params_.color_enabled && !record_config.color_track_enabled) {
-      RCLCPP_WARN(this->get_logger(),
-        "Disabling color and rgb_point_cloud because recording has no color track");
-      params_.color_enabled = false;
-      params_.rgb_point_cloud = false;
-    }
-    // This is necessary because at the moment there are only checks in place which use BgraPixel size
-    else if (params_.color_enabled && record_config.color_track_enabled) {
-      if (params_.color_format == "jpeg" &&
-        record_config.color_format != K4A_IMAGE_FORMAT_COLOR_MJPG)
-      {
-        RCLCPP_FATAL(this->get_logger(),
-          "Converting color images to K4A_IMAGE_FORMAT_COLOR_MJPG is not supported.");
-        rclcpp::shutdown();
-        return;
-      }
-      if (params_.color_format == "bgra" &&
-        record_config.color_format != K4A_IMAGE_FORMAT_COLOR_BGRA32)
-      {
-        k4a_playback_handle_.set_color_conversion(K4A_IMAGE_FORMAT_COLOR_BGRA32);
-      }
-    }
-
-    // Disable depth if the recording has neither ir track nor depth track
-    if (!record_config.ir_track_enabled && !record_config.depth_track_enabled) {
-      if (params_.depth_enabled) {
-        RCLCPP_WARN(this->get_logger(),
-          "Disabling depth because recording has neither ir track nor depth track");
-        params_.depth_enabled = false;
-      }
-    }
-
-    // Disable depth if the recording has no depth track
-    if (!record_config.depth_track_enabled) {
-      if (params_.point_cloud) {
-        RCLCPP_WARN(this->get_logger(),
-          "Disabling point cloud because recording has no depth track");
-        params_.point_cloud = false;
-      }
-      if (params_.rgb_point_cloud) {
-        RCLCPP_WARN(this->get_logger(),
-          "Disabling rgb point cloud because recording has no depth track");
-        params_.rgb_point_cloud = false;
-      }
-    }
-  } else {
-    // Setup the K4A device
-    uint32_t k4a_device_count = k4a::device::get_installed_count();
-
-    RCLCPP_INFO_STREAM(this->get_logger(), "Found " << k4a_device_count << " sensors");
-
-    if (params_.sensor_sn != "") {
-      RCLCPP_INFO_STREAM(this->get_logger(),
-        "Searching for sensor with serial number: " << params_.sensor_sn);
-    } else {
-      RCLCPP_INFO(this->get_logger(), "No serial number provided: picking first sensor");
-      RCLCPP_WARN_EXPRESSION(this->get_logger(), k4a_device_count > 1,
-        "Multiple sensors connected! Picking first sensor.");
-    }
-
-    for (uint32_t i = 0; i < k4a_device_count; i++) {
-      k4a::device device;
-      try {
-        device = k4a::device::open(i);
-      } catch (exception const &) {
-        RCLCPP_ERROR_STREAM(this->get_logger(), "Failed to open K4A device at index " << i);
-        continue;
-      }
-
-      RCLCPP_INFO_STREAM(this->get_logger(), "K4A[" << i << "] : " << device.get_serialnum());
-
-      // Try to match serial number
-      if (params_.sensor_sn != "") {
-        if (device.get_serialnum() == params_.sensor_sn) {
-          k4a_device_ = std::move(device);
-          break;
-        }
-      }
-      // Pick the first device
-      else if (i == 0) {
-        k4a_device_ = std::move(device);
-        break;
-      }
-    }
-
-    if (!k4a_device_) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to open a K4A device. Cannot continue.");
-      return;
-    }
-
-    RCLCPP_INFO_STREAM(this->get_logger(), "K4A Serial Number: " << k4a_device_.get_serialnum());
-
-    k4a_hardware_version_t version_info = k4a_device_.get_version();
-
-    RCLCPP_INFO(this->get_logger(), "RGB Version: %d.%d.%d", version_info.rgb.major,
-      version_info.rgb.minor, version_info.rgb.iteration);
-
-    RCLCPP_INFO(this->get_logger(), "Depth Version: %d.%d.%d", version_info.depth.major,
-      version_info.depth.minor,
-             version_info.depth.iteration);
-
-    RCLCPP_INFO(this->get_logger(), "Audio Version: %d.%d.%d", version_info.audio.major,
-      version_info.audio.minor,
-             version_info.audio.iteration);
-
-    RCLCPP_INFO(this->get_logger(), "Depth Sensor Version: %d.%d.%d",
-      version_info.depth_sensor.major, version_info.depth_sensor.minor,
-             version_info.depth_sensor.iteration);
+  try {
+    source_ = azure_kinect_ros_driver::makeCaptureSource(params_, this->get_logger());
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR_STREAM(this->get_logger(), "Cannot continue: " << error.what());
+    return;
   }
 
   // Register our topics. Only the streams the configuration can produce are advertised, so that
@@ -331,10 +187,6 @@ K4AROSDevice::~K4AROSDevice()
   stopCameras();
   stopImu();
 
-  if (k4a_playback_handle_) {
-    k4a_playback_handle_.close();
-  }
-
 #if defined(K4A_BODY_TRACKING)
   if (k4abt_tracker_) {
     k4abt_tracker_.shutdown();
@@ -344,36 +196,19 @@ K4AROSDevice::~K4AROSDevice()
 
 k4a_result_t K4AROSDevice::startCameras()
 {
-  k4a_device_configuration_t k4a_configuration = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
-  k4a_result_t result = params_.GetDeviceConfig(&k4a_configuration);
-
   if (params_.ValidateImuRate() != K4A_RESULT_SUCCEEDED) {
     RCLCPP_ERROR(this->get_logger(), "Invalid IMU rate. Not starting camera!");
     return K4A_RESULT_FAILED;
   }
 
-  if (!k4a_device_ && !k4a_playback_handle_) {
+  if (!source_) {
     RCLCPP_ERROR(this->get_logger(),
       "Neither a K4A device nor a recording is open. Not starting camera!");
     return K4A_RESULT_FAILED;
   }
 
-  if (k4a_device_) {
-    if (result != K4A_RESULT_SUCCEEDED) {
-      RCLCPP_ERROR(this->get_logger(),
-        "Failed to generate a device configuration. Not starting camera!");
-      return result;
-    }
-
-    // Now that we have a proposed camera configuration, we can
-    // initialize the class which will take care of device calibration information
-    calibration_data_.initialize(k4a_device_, k4a_configuration.depth_mode,
-      k4a_configuration.color_resolution,
-                                 params_);
-  } else if (k4a_playback_handle_) {
-    // initialize the class which will take care of device calibration information from the playback_handle
-    calibration_data_.initialize(k4a_playback_handle_, params_);
-  }
+  // Now that the source is open, initialize the class which will take care of the calibration
+  calibration_data_.initialize(source_->calibration(), params_);
 
 #if defined(K4A_BODY_TRACKING)
   // When calibration is initialized the body tracker can be created with the device calibration
@@ -383,9 +218,12 @@ k4a_result_t K4AROSDevice::startCameras()
   }
 #endif
 
-  if (k4a_device_) {
-    RCLCPP_INFO_STREAM(this->get_logger(), "STARTING CAMERAS");
-    k4a_device_.start_cameras(&k4a_configuration);
+  RCLCPP_INFO_STREAM(this->get_logger(), "STARTING " << source_->description());
+  try {
+    source_->start();
+  } catch (const k4a::error & error) {
+    RCLCPP_ERROR_STREAM(this->get_logger(), "Failed to start the cameras: " << error.what());
+    return K4A_RESULT_FAILED;
   }
 
   // Prevent the worker thread from exiting immediately
@@ -404,12 +242,7 @@ k4a_result_t K4AROSDevice::startCameras()
 
 k4a_result_t K4AROSDevice::startImu()
 {
-  if (k4a_device_) {
-    RCLCPP_INFO_STREAM(this->get_logger(), "STARTING IMU");
-    k4a_device_.start_imu();
-  }
-
-  // Start the IMU publisher thread
+  // The source has already started the IMU together with the cameras; start the publisher thread
   imu_publisher_thread_ =
     thread(&K4AROSDevice::runGuarded, this, "IMU", &K4AROSDevice::imuPublisherThread);
 
@@ -418,19 +251,16 @@ k4a_result_t K4AROSDevice::startImu()
 
 void K4AROSDevice::stopCameras()
 {
-  if (k4a_device_) {
-    // Stop the K4A SDK
-    RCLCPP_INFO(this->get_logger(), "Stopping K4A device");
-    k4a_device_.stop_cameras();
-    RCLCPP_INFO(this->get_logger(), "K4A device stopped");
+  if (source_) {
+    RCLCPP_INFO(this->get_logger(), "Stopping the source");
+    source_->stop();
+    RCLCPP_INFO(this->get_logger(), "Source stopped");
   }
 }
 
 void K4AROSDevice::stopImu()
 {
-  if (k4a_device_) {
-    k4a_device_.stop_imu();
-  }
+  // The IMU is stopped together with the cameras
 }
 
 k4a_result_t K4AROSDevice::getDepthFrame(
@@ -797,8 +627,6 @@ void K4AROSDevice::runGuarded(const char * name, void (K4AROSDevice::*thread_bod
 
 void K4AROSDevice::framePublisherThread()
 {
-  rclcpp::Rate loop_rate(params_.fps);
-
   k4a_result_t result;
 
   CameraInfo rgb_raw_camera_info;
@@ -823,61 +651,53 @@ void K4AROSDevice::framePublisherThread()
   std::chrono::milliseconds waitTime = firstFrameWaitTime;
 
   int consecutive_failures = 0;
+  std::chrono::microseconds last_capture_timestamp{ 0 };
 
   while (running_ && rclcpp::ok()) {
-    if (k4a_device_) {
-      bool got_capture = false;
-      try {
-        got_capture = k4a_device_.get_capture(&capture, waitTime);
-      } catch (const k4a::error & e) {
-        // A hardware-level capture failure (e.g. a corrupted USB frame breaking the
-        // sensor's internal MJPEG decode) surfaces here as an exception rather than
-        // through the plain timeout path below; treat it as recoverable and retry on
-        // the next iteration instead of letting the node crash.
-        RCLCPP_ERROR(this->get_logger(), "Failed to get capture, retrying: %s", e.what());
-        loop_rate.sleep();
-        continue;
-      }
-      if (!got_capture) {
-        RCLCPP_FATAL(this->get_logger(), "Failed to poll cameras: node cannot continue.");
-        rclcpp::shutdown();
-        return;
-      } else {
-        if (params_.depth_enabled) {
-          // Update the timestamp offset based on the difference between the system timestamp (i.e., arrival at USB bus)
-          // and device timestamp (i.e., hardware clock at exposure start).
-          updateClock(capture.get_ir_image().get_device_timestamp(),
-                                capture.get_ir_image().get_system_timestamp());
-        } else if (params_.color_enabled) {
-          updateClock(capture.get_color_image().get_device_timestamp(),
-                                capture.get_color_image().get_system_timestamp());
-        }
+    azure_kinect_ros_driver::CaptureSource::Status status;
+    try {
+      status = source_->nextCapture(capture, waitTime);
+    } catch (const k4a::error & e) {
+      // A hardware-level capture failure (e.g. a corrupted USB frame breaking the
+      // sensor's internal MJPEG decode) surfaces here as an exception rather than
+      // through the plain timeout path below; treat it as recoverable and retry on
+      // the next iteration instead of letting the node crash.
+      RCLCPP_ERROR(this->get_logger(), "Failed to get capture, retrying: %s", e.what());
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000 / params_.fps));
+      continue;
+    }
+
+    if (status == azure_kinect_ros_driver::CaptureSource::Status::kTimeout) {
+      RCLCPP_FATAL(this->get_logger(), "Failed to poll cameras: node cannot continue.");
+      rclcpp::shutdown();
+      return;
+    }
+    if (status == azure_kinect_ros_driver::CaptureSource::Status::kEndOfStream) {
+      RCLCPP_INFO(this->get_logger(), "Recording reached end of file. node cannot continue.");
+      rclcpp::shutdown();
+      return;
+    }
+
+    if (status == azure_kinect_ros_driver::CaptureSource::Status::kRestarted) {
+      // The device timestamps restart from the beginning of the recording; keep the ROS time
+      // moving forward
+      clock_.continueAfterRestart(
+        last_capture_timestamp, azure_kinect_ros_driver::captureTimestamp(capture),
+        std::chrono::nanoseconds(1000000000LL / params_.fps));
+    }
+    last_capture_timestamp = azure_kinect_ros_driver::captureTimestamp(capture);
+
+    if (source_->providesSystemTimestamps()) {
+      if (params_.depth_enabled) {
+        // Update the timestamp offset based on the difference between the system timestamp (i.e.,
+        // arrival at USB bus) and device timestamp (i.e., hardware clock at exposure start).
+        updateClock(capture.get_ir_image().get_device_timestamp(),
+          capture.get_ir_image().get_system_timestamp());
+      } else if (params_.color_enabled) {
+        updateClock(capture.get_color_image().get_device_timestamp(),
+          capture.get_color_image().get_system_timestamp());
       }
       waitTime = regularFrameWaitTime;
-    } else if (k4a_playback_handle_) {
-      std::lock_guard<std::mutex> guard(k4a_playback_handle_mutex_);
-      if (!k4a_playback_handle_.get_next_capture(&capture)) {
-        // rewind recording if looping is enabled
-        if (params_.recording_loop_enabled) {
-          k4a_playback_handle_.seek_timestamp(std::chrono::microseconds(0),
-            K4A_PLAYBACK_SEEK_BEGIN);
-          k4a_playback_handle_.get_next_capture(&capture);
-          imu_stream_end_of_file_ = false;
-          last_imu_time_usec_ = 0;
-
-          // The device timestamps restart from the beginning of the recording; keep the ROS time
-          // moving forward
-          clock_.continueAfterRestart(
-            std::chrono::microseconds(last_capture_time_usec_.load()), getCaptureTimestamp(capture),
-            std::chrono::nanoseconds(1000000000LL / params_.fps));
-        } else {
-          RCLCPP_INFO(this->get_logger(), "Recording reached end of file. node cannot continue.");
-          rclcpp::shutdown();
-          return;
-        }
-      }
-
-      last_capture_time_usec_ = getCaptureTimestamp(capture).count();
     }
 
     // Set when any stream of this capture could not be produced
@@ -898,7 +718,7 @@ void K4AROSDevice::framePublisherThread()
 
       if ((subscriberCount(ir_raw_publisher_) > 0 ||
         subscriberCount(ir_raw_camerainfo_publisher_) > 0) &&
-        (k4a_device_ || capture.get_ir_image() != nullptr))
+        (source_->capturesAreComplete() || capture.get_ir_image() != nullptr))
       {
         // IR images are available in all depth modes
         result = getIrFrame(capture, ir_raw_frame);
@@ -924,7 +744,7 @@ void K4AROSDevice::framePublisherThread()
 
         if ((subscriberCount(depth_raw_publisher_) > 0 ||
           subscriberCount(depth_raw_camerainfo_publisher_) > 0) &&
-          (k4a_device_ || capture.get_depth_image() != nullptr))
+          (source_->capturesAreComplete() || capture.get_depth_image() != nullptr))
         {
           result = getDepthFrame(capture, depth_raw_frame);
 
@@ -949,7 +769,7 @@ void K4AROSDevice::framePublisherThread()
         if (params_.color_enabled &&
           (subscriberCount(depth_rect_publisher_) > 0 ||
           subscriberCount(depth_rect_camerainfo_publisher_) > 0) &&
-          (k4a_device_ || capture.get_depth_image() != nullptr))
+          (source_->capturesAreComplete() || capture.get_depth_image() != nullptr))
         {
           result = getDepthFrame(capture, depth_rect_frame, true /* rectified */);
 
@@ -990,7 +810,7 @@ void K4AROSDevice::framePublisherThread()
       if (params_.color_format == "jpeg") {
         if ((subscriberCount(rgb_jpeg_publisher_) > 0 ||
           subscriberCount(rgb_raw_camerainfo_publisher_) > 0) &&
-          (k4a_device_ || capture.get_color_image() != nullptr))
+          (source_->capturesAreComplete() || capture.get_color_image() != nullptr))
         {
           result = getJpegRgbFrame(capture, rgb_jpeg_frame);
 
@@ -1014,7 +834,7 @@ void K4AROSDevice::framePublisherThread()
       } else if (params_.color_format == "bgra") {
         if ((subscriberCount(rgb_raw_publisher_) > 0 ||
           subscriberCount(rgb_raw_camerainfo_publisher_) > 0) &&
-          (k4a_device_ || capture.get_color_image() != nullptr))
+          (source_->capturesAreComplete() || capture.get_color_image() != nullptr))
         {
           result = getRgbFrame(capture, rgb_raw_frame);
 
@@ -1039,7 +859,7 @@ void K4AROSDevice::framePublisherThread()
           (calibration_data_.k4a_calibration_.depth_mode != K4A_DEPTH_MODE_PASSIVE_IR) &&
           (subscriberCount(rgb_rect_publisher_) > 0 ||
           subscriberCount(rgb_rect_camerainfo_publisher_) > 0) &&
-          (k4a_device_ ||
+          (source_->capturesAreComplete() ||
           (capture.get_color_image() != nullptr && capture.get_depth_image() != nullptr)))
         {
           result = getRgbFrame(capture, rgb_rect_frame, true /* rectified */);
@@ -1063,7 +883,7 @@ void K4AROSDevice::framePublisherThread()
     // Recordings may not have synchronized captures. In unsynchronized captures skip point cloud.
 
     if (subscriberCount(pointcloud_publisher_) > 0 &&
-      (k4a_device_ ||
+      (source_->capturesAreComplete() ||
       (capture.get_color_image() != nullptr && capture.get_depth_image() != nullptr)))
     {
       if (params_.rgb_point_cloud) {
@@ -1104,13 +924,6 @@ void K4AROSDevice::framePublisherThread()
       }
     } else {
       consecutive_failures = 0;
-    }
-
-    // With a device, get_capture() already blocks until the next frame arrives. Sleeping on top
-    // of that adds up to a frame period of latency and lets captures queue up in the SDK. The
-    // recording has no such pacing, so it still needs the rate limiter.
-    if (!k4a_device_) {
-      loop_rate.sleep();
     }
   }
 }
@@ -1189,8 +1002,6 @@ void K4AROSDevice::publishImuSample(const k4a_imu_sample_t & sample)
 
 void K4AROSDevice::imuPublisherThread()
 {
-  rclcpp::Rate loop_rate(300);
-
   k4a_imu_sample_t sample;
   k4a_imu_sample_t output;
 
@@ -1198,58 +1009,18 @@ void K4AROSDevice::imuPublisherThread()
   ImuThrottler throttler(IMU_MAX_RATE / params_.imu_rate_target);
 
   while (running_ && rclcpp::ok()) {
-    if (k4a_device_) {
-      // IMU messages are delivered in batches at 300 Hz. Block until the first one of a batch
-      // arrives (with a timeout so that the thread can notice it has to stop), then drain the
-      // rest of the queue without waiting.
-      bool read = k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(10));
-      while (read) {
-        if (throttler.add(sample, output)) {
-          publishImuSample(output);
-        }
-        read = k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(0));
+    // IMU messages are delivered in batches at 300 Hz. Block until the first one of a batch
+    // arrives (with a timeout so that the thread can notice it has to stop), then drain the
+    // rest of the queue without waiting.
+    azure_kinect_ros_driver::CaptureSource::Status status =
+      source_->nextImuSample(sample, std::chrono::milliseconds(10));
+    while (status == azure_kinect_ros_driver::CaptureSource::Status::kOk) {
+      if (throttler.add(sample, output)) {
+        publishImuSample(output);
       }
-    } else if (k4a_playback_handle_) {
-      // publish imu messages as long as the imu timestamp is less than the last capture timestamp to catch up to the
-      // cameras compare signed with unsigned shouldn't cause a problem because timestamps should always be positive
-      while (last_imu_time_usec_ <= last_capture_time_usec_ && !imu_stream_end_of_file_) {
-        std::lock_guard<std::mutex> guard(k4a_playback_handle_mutex_);
-        if (!k4a_playback_handle_.get_next_imu_sample(&sample)) {
-          imu_stream_end_of_file_ = true;
-        } else if (throttler.add(sample, output)) {
-          publishImuSample(output);
-          last_imu_time_usec_ = sample.acc_timestamp_usec;
-        }
-      }
-    }
-
-    // With a device the blocking read above paces the loop; a recording needs the rate limiter
-    if (!k4a_device_) {
-      loop_rate.sleep();
+      status = source_->nextImuSample(sample, std::chrono::milliseconds(0));
     }
   }
-}
-
-std::chrono::microseconds K4AROSDevice::getCaptureTimestamp(const k4a::capture & capture)
-{
-  // Captures don't actually have timestamps, images do, so we have to look at all the images
-  // associated with the capture.  We just return the first one we get back.
-  //
-  // We check the IR capture instead of the depth capture because if the depth camera is started
-  // in passive IR mode, it only has an IR image (i.e. no depth image), but there is no mode
-  // where a capture will have a depth image but not an IR image.
-  //
-  const auto irImage = capture.get_ir_image();
-  if (irImage != nullptr) {
-    return irImage.get_device_timestamp();
-  }
-
-  const auto colorImage = capture.get_color_image();
-  if (colorImage != nullptr) {
-    return colorImage.get_device_timestamp();
-  }
-
-  return std::chrono::microseconds::zero();
 }
 
 // Converts a k4a *device* timestamp to a ros::Time object

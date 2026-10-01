@@ -12,7 +12,6 @@
 //
 #include <k4a/k4a.h>
 #include <k4a/k4a.hpp>
-#include <k4arecord/playback.hpp>
 #include "rclcpp/rclcpp.hpp"
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
@@ -29,9 +28,7 @@ class K4ACalibrationTransformData
 public:
   // The node provides the logger, the clock and the transform broadcaster. It must outlive this object.
   explicit K4ACalibrationTransformData(rclcpp::Node* node);
-  void initialize(const k4a::device& device, const k4a_depth_mode_t depthMode, const k4a_color_resolution_t resolution,
-                  const K4AROSDeviceParams& params);
-  void initialize(const k4a::playback& k4a_playback_handle, const K4AROSDeviceParams& params);
+  void initialize(const k4a::calibration& calibration, const K4AROSDeviceParams& params);
   int getDepthWidth();
   int getDepthHeight();
   int getColorWidth();
@@ -54,8 +51,6 @@ public:
   std::string imu_frame_ = "imu_link";
 
 private:
-  void initialize(const K4AROSDeviceParams& params);
-
   void printCameraCalibration(k4a_calibration_camera_t& calibration);
   void printExtrinsics(k4a_calibration_extrinsics_t& extrinsics);
 

@@ -102,7 +102,8 @@ public:
   void Print();
 
 // Parameters
-#define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) param_type param_variable;
+#define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
+  param_type param_variable = param_default_val;
   ROS_PARAM_LIST
 #undef LIST_ENTRY
 

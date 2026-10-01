@@ -28,21 +28,10 @@ K4ACalibrationTransformData::K4ACalibrationTransformData(rclcpp::Node* node) : n
 {
   static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node_);
 }
-void K4ACalibrationTransformData::initialize(const k4a::device& device, const k4a_depth_mode_t depth_mode,
-                                             const k4a_color_resolution_t resolution, const K4AROSDeviceParams& params)
+void K4ACalibrationTransformData::initialize(const k4a::calibration& calibration,
+                                             const K4AROSDeviceParams& params)
 {
-  k4a_calibration_ = device.get_calibration(depth_mode, resolution);
-  initialize(params);
-}
-
-void K4ACalibrationTransformData::initialize(const k4a::playback& k4a_playback_handle, const K4AROSDeviceParams& params)
-{
-  k4a_calibration_ = k4a_playback_handle.get_calibration();
-  initialize(params);
-}
-
-void K4ACalibrationTransformData::initialize(const K4AROSDeviceParams& params)
-{
+  k4a_calibration_ = calibration;
   k4a_transformation_ = k4a::transformation(k4a_calibration_);
   tf_prefix_ = params.tf_prefix;
 

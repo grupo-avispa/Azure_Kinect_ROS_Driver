@@ -78,11 +78,15 @@ include(Installk4a)
 add_library(${PROJECT_NAME}_core STATIC
   src/k4a_conversions.cpp
   src/clock_synchronizer.cpp
+  src/capture_source.cpp
+  src/device_source.cpp
+  src/playback_source.cpp
+  src/k4a_ros_device_params.cpp
   )
 set_target_properties(${PROJECT_NAME}_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-ament_target_dependencies(${PROJECT_NAME}_core PUBLIC sensor_msgs)
+ament_target_dependencies(${PROJECT_NAME}_core PUBLIC rclcpp sensor_msgs)
 target_link_libraries(${PROJECT_NAME}_core PUBLIC ${K4A_LIBS})
 if(K4A_BODY_TRACKING_ENABLED)
   target_compile_definitions(${PROJECT_NAME}_core PUBLIC K4A_BODY_TRACKING)
@@ -92,7 +96,6 @@ endif()
 add_executable(${PROJECT_NAME}_node
   src/k4a_ros_bridge_node.cpp
   src/k4a_ros_device.cpp
-  src/k4a_ros_device_params.cpp
   src/k4a_calibration_transform_data.cpp
   )
 target_include_directories(${PROJECT_NAME}_node PRIVATE include)
@@ -140,6 +143,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_conversions test/test_conversions.cpp)
   target_link_libraries(test_conversions ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_params test/test_params.cpp)
+  target_link_libraries(test_params ${PROJECT_NAME}_core)
 
   ament_add_gtest(test_clock_synchronizer test/test_clock_synchronizer.cpp)
   target_link_libraries(test_clock_synchronizer ${PROJECT_NAME}_core)
