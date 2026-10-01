@@ -1442,10 +1442,12 @@ void K4AROSDevice::updateTimestampOffset(
   // Next figure out the other part (combined).
   std::chrono::nanoseconds device_to_realtime =
     k4a_system_timestamp_ns - k4a_device_timestamp_us + monotonic_to_realtime;
-  // If we're over a second off, just snap into place.
+  // If the new measurement is further than this from the filtered estimate, treat it as a clock
+  // step and snap into place instead of low-pass filtering it.
+  constexpr std::chrono::nanoseconds kClockSnapThreshold = std::chrono::milliseconds(10);
   const std::chrono::nanoseconds current_offset(device_to_realtime_offset_ns_.load());
   if (current_offset.count() == 0 ||
-    std::abs((current_offset - device_to_realtime).count()) > 1e7)
+    std::abs((current_offset - device_to_realtime).count()) > kClockSnapThreshold.count())
   {
     RCLCPP_WARN_STREAM(this->get_logger(),
       "Initializing or re-initializing the device to realtime offset: "               <<
