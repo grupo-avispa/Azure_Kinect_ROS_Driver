@@ -10,6 +10,8 @@
 #include <cfloat>
 #include <thread>
 #include <iomanip>
+#include <limits>
+#include <type_traits>
 #include <unordered_map>
 
 // Library headers
@@ -39,6 +41,81 @@ namespace
 {
 // Consecutive captures that may fail to render before the node gives up
 constexpr int kMaxConsecutiveFrameFailures = 30;
+
+// Sets the layout of a point cloud message with the size of the SDK point cloud image
+void initPointCloud(
+  const k4a::image & pointcloud_image,
+  std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud, bool with_color)
+{
+  point_cloud->height = pointcloud_image.get_height_pixels();
+  point_cloud->width = pointcloud_image.get_width_pixels();
+  point_cloud->is_dense = false;
+  point_cloud->is_bigendian = false;
+
+  sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
+  if (with_color) {
+    pcd_modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
+  } else {
+    pcd_modifier.setPointCloud2FieldsByString(1, "xyz");
+  }
+  pcd_modifier.resize(point_cloud->height * point_cloud->width);
+}
+
+// Placeholder for the color iterators of a point cloud that has no color
+struct NoColorIterator
+{
+  NoColorIterator(sensor_msgs::msg::PointCloud2 &, const std::string &) {}
+  NoColorIterator & operator++() {return *this;}
+};
+
+// Fills the points of an already sized cloud from the SDK point cloud image (x, y, z in
+// millimetres) and, if requested, from a BGRA image. Invalid points become NaN.
+template<bool kWithColor>
+void fillPoints(
+  sensor_msgs::msg::PointCloud2 & cloud, const int16_t * point_cloud_buffer,
+  const uint8_t * color_buffer, size_t point_count)
+{
+  using ColorIterator = std::conditional_t<kWithColor,
+      sensor_msgs::PointCloud2Iterator<uint8_t>, NoColorIterator>;
+
+  sensor_msgs::PointCloud2Iterator<float> iter_x(cloud, "x");
+  sensor_msgs::PointCloud2Iterator<float> iter_y(cloud, "y");
+  sensor_msgs::PointCloud2Iterator<float> iter_z(cloud, "z");
+  ColorIterator iter_r(cloud, "r");
+  ColorIterator iter_g(cloud, "g");
+  ColorIterator iter_b(cloud, "b");
+
+  constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
+
+  for (size_t i = 0; i < point_count;
+    i++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
+  {
+    // Z in image frame:
+    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
+
+    bool valid = z > 0.0f;
+    if constexpr (kWithColor) {
+      // Alpha value:
+      valid = valid && color_buffer[4 * i + 3] != 0;
+    }
+
+    if (!valid) {
+      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
+      if constexpr (kWithColor) {
+        *iter_r = *iter_g = *iter_b = 0;
+      }
+    } else {
+      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
+      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
+      *iter_z = kMillimeterToMeter * z;
+      if constexpr (kWithColor) {
+        *iter_r = color_buffer[4 * i + 2];
+        *iter_g = color_buffer[4 * i + 1];
+        *iter_b = color_buffer[4 * i + 0];
+      }
+    }
+  }
+}
 
 // Number of subscribers of a publisher that may not have been created (disabled stream)
 template<typename PublisherT>
@@ -686,11 +763,6 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(
   const k4a::image & pointcloud_image, const k4a::image & color_image,
   std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud)
 {
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
-  point_cloud->is_dense = false;
-  point_cloud->is_bigendian = false;
-
   const size_t point_count = pointcloud_image.get_height_pixels() *
     pointcloud_image.get_width_pixels();
   const size_t pixel_count = color_image.get_size() / sizeof(BgraPixel);
@@ -700,44 +772,9 @@ k4a_result_t K4AROSDevice::fillColorPointCloud(
     return K4A_RESULT_FAILED;
   }
 
-  sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
-  pcd_modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
-
-  sensor_msgs::PointCloud2Iterator<float> iter_x(*point_cloud, "x");
-  sensor_msgs::PointCloud2Iterator<float> iter_y(*point_cloud, "y");
-  sensor_msgs::PointCloud2Iterator<float> iter_z(*point_cloud, "z");
-
-  sensor_msgs::PointCloud2Iterator<uint8_t> iter_r(*point_cloud, "r");
-  sensor_msgs::PointCloud2Iterator<uint8_t> iter_g(*point_cloud, "g");
-  sensor_msgs::PointCloud2Iterator<uint8_t> iter_b(*point_cloud, "b");
-
-  pcd_modifier.resize(point_count);
-
-  const int16_t * point_cloud_buffer =
-    reinterpret_cast<const int16_t *>(pointcloud_image.get_buffer());
-  const uint8_t * color_buffer = color_image.get_buffer();
-
-  for (size_t i = 0; i < point_count;
-    i++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
-  {
-    // Z in image frame:
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
-    // Alpha value:
-    uint8_t a = color_buffer[4 * i + 3];
-    if (z <= 0.0f || a == 0) {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-      *iter_r = *iter_g = *iter_b = 0;
-    } else {
-      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
-
-      *iter_r = color_buffer[4 * i + 2];
-      *iter_g = color_buffer[4 * i + 1];
-      *iter_b = color_buffer[4 * i + 0];
-    }
-  }
+  initPointCloud(pointcloud_image, point_cloud, true);
+  fillPoints<true>(*point_cloud, reinterpret_cast<const int16_t *>(pointcloud_image.get_buffer()),
+    color_image.get_buffer(), point_count);
 
   return K4A_RESULT_SUCCEEDED;
 }
@@ -746,38 +783,12 @@ k4a_result_t K4AROSDevice::fillPointCloud(
   const k4a::image & pointcloud_image,
   std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud)
 {
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
-  point_cloud->is_dense = false;
-  point_cloud->is_bigendian = false;
-
   const size_t point_count = pointcloud_image.get_height_pixels() *
     pointcloud_image.get_width_pixels();
 
-  sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
-  pcd_modifier.setPointCloud2FieldsByString(1, "xyz");
-
-  sensor_msgs::PointCloud2Iterator<float> iter_x(*point_cloud, "x");
-  sensor_msgs::PointCloud2Iterator<float> iter_y(*point_cloud, "y");
-  sensor_msgs::PointCloud2Iterator<float> iter_z(*point_cloud, "z");
-
-  pcd_modifier.resize(point_count);
-
-  const int16_t * point_cloud_buffer =
-    reinterpret_cast<const int16_t *>(pointcloud_image.get_buffer());
-
-  for (size_t i = 0; i < point_count; i++, ++iter_x, ++iter_y, ++iter_z) {
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
-
-    if (z <= 0.0f) {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-    } else {
-      constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
-    }
-  }
+  initPointCloud(pointcloud_image, point_cloud, false);
+  fillPoints<false>(*point_cloud, reinterpret_cast<const int16_t *>(pointcloud_image.get_buffer()),
+    nullptr, point_count);
 
   return K4A_RESULT_SUCCEEDED;
 }
