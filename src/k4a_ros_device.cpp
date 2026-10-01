@@ -1147,7 +1147,7 @@ void K4AROSDevice::framePublisherThread()
             rgb_raw_camera_info.header.stamp = capture_time;
             rgb_raw_camerainfo_publisher_->publish(rgb_raw_camera_info);
           }
-}
+        }
       } else if (params_.color_format == "bgra") {
         if ((subscriberCount(rgb_raw_publisher_) > 0 ||
           subscriberCount(rgb_raw_camerainfo_publisher_) > 0) &&
@@ -1171,7 +1171,7 @@ void K4AROSDevice::framePublisherThread()
             rgb_raw_camera_info.header.stamp = capture_time;
             rgb_raw_camerainfo_publisher_->publish(rgb_raw_camera_info);
           }
-}
+        }
 
         // We can only rectify the color into the depth co-ordinates if the depth camera is enabled and processing depth
         // data Only create rgb rect frame when we are using a device or we have a synchronized image. Recordings may
@@ -1202,7 +1202,7 @@ void K4AROSDevice::framePublisherThread()
             rgb_rect_camera_info.header.stamp = capture_time;
             rgb_rect_camerainfo_publisher_->publish(rgb_rect_camera_info);
           }
-}
+        }
       }
     }
 
