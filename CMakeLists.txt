@@ -7,7 +7,7 @@ project(azure_kinect_ros_driver LANGUAGES C CXX)
 list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_CURRENT_LIST_DIR}/cmake)
 
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -99,7 +99,7 @@ include(Installk4a)
 ##################################
 ###### END AZURE KINECT SDK ######
 ##################################
-include_directories(include)
+target_include_directories(${PROJECT_NAME}_node PRIVATE include)
 
 target_link_libraries(${PROJECT_NAME}_node
   ${K4A_LIBS}
@@ -114,8 +114,6 @@ target_link_libraries(${PROJECT_NAME}_node
 
 ## Mark executables and/or libraries for installation
 install(TARGETS ${PROJECT_NAME}_node
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
