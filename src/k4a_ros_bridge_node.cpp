@@ -23,7 +23,7 @@ int main(int argc, char** argv)
 
 
   // Setup the K4A device
-  std::shared_ptr<K4AROSDevice> device(new K4AROSDevice);
+  auto device = std::make_shared<K4AROSDevice>();
 
   k4a_result_t result = device->startCameras();
 

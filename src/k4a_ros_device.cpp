@@ -48,9 +48,9 @@ K4AROSDevice::K4AROSDevice()
   last_imu_time_usec_(0),
   imu_stream_end_of_file_(false)
 {
-  // Declare an image transport
-  auto image_transport_ =
-    new image_transport::ImageTransport(static_cast<rclcpp::Node::SharedPtr>(this));
+  // Image topics are advertised through the free-function API, which does not take ownership of
+  // this node (building a shared_ptr from `this` here would create a second control block).
+  const rmw_qos_profile_t image_qos = rclcpp::QoS(1).get_rmw_qos_profile();
 
   // Declare depth topics
   static const std::string depth_raw_topic = "depth/image_raw";
@@ -239,25 +239,25 @@ K4AROSDevice::K4AROSDevice()
     // http://wiki.ros.org/compressed_image_transport#Publishing_compressed_images_directly
     rgb_jpeg_publisher_ = this->create_publisher<CompressedImage>("rgb/image_raw/compressed", 1);
   } else if (params_.color_format == "bgra") {
-    rgb_raw_publisher_ = image_transport_->advertise("rgb/image_raw", 1, true);
+    rgb_raw_publisher_ = image_transport::create_publisher(this, "rgb/image_raw", image_qos);
   }
   rgb_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("rgb/camera_info", 1);
 
-  depth_raw_publisher_ = image_transport_->advertise("depth/image_raw", 1, true);
+  depth_raw_publisher_ = image_transport::create_publisher(this, "depth/image_raw", image_qos);
   depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
 
-  depth_raw_publisher_ = image_transport_->advertise(depth_raw_topic, 1, true);
+  depth_raw_publisher_ = image_transport::create_publisher(this, depth_raw_topic, image_qos);
   depth_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth/camera_info", 1);
 
-  depth_rect_publisher_ = image_transport_->advertise(depth_rect_topic, 1, true);
+  depth_rect_publisher_ = image_transport::create_publisher(this, depth_rect_topic, image_qos);
   depth_rect_camerainfo_publisher_ = this->create_publisher<CameraInfo>("depth_to_rgb/camera_info",
     1);
 
-  rgb_rect_publisher_ = image_transport_->advertise("rgb_to_depth/image_raw", 1, true);
+  rgb_rect_publisher_ = image_transport::create_publisher(this, "rgb_to_depth/image_raw", image_qos);
   rgb_rect_camerainfo_publisher_ = this->create_publisher<CameraInfo>("rgb_to_depth/camera_info",
     1);
 
-  ir_raw_publisher_ = image_transport_->advertise("ir/image_raw", 1, true);
+  ir_raw_publisher_ = image_transport::create_publisher(this, "ir/image_raw", image_qos);
   ir_raw_camerainfo_publisher_ = this->create_publisher<CameraInfo>("ir/camera_info", 1);
 
   imu_orientation_publisher_ = this->create_publisher<Imu>("imu", 200);
