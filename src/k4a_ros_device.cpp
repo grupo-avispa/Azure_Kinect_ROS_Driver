@@ -463,12 +463,6 @@ k4a_result_t K4AROSDevice::startCameras()
     k4a_device_.start_cameras(&k4a_configuration);
   }
 
-  // Cannot assume the device timestamp begins increasing upon starting the cameras.
-  // If we set the time base here, depending on the machine performance, the new timestamp
-  // would lag the value of ros::Time::now() by at least 0.5 secs which is much larger than
-  // the real transmission delay as can be observed using the rqt_plot tool.
-  // start_time_ = ros::Time::now();
-
   // Prevent the worker thread from exiting immediately
   running_ = true;
 

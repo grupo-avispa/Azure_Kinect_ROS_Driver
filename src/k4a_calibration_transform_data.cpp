@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+// Needed for M_PI with MSVC; must come before any standard header
+#define _USE_MATH_DEFINES
+
 // Associated header
 //
 #include "azure_kinect_ros_driver/k4a_calibration_transform_data.h"

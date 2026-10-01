@@ -48,12 +48,12 @@ static const ColorPalette BODY_COLOR_PALETTE{ { { 1.0f, 0.0f, 0.0f, 1.0f },
  * </requirements>
  * \endxmlonly
  */
-typedef struct _k4a_double3_t
+struct k4a_double3_t
 {
   double x = 0.0; /**< X component of a vector. */
   double y = 0.0; /**< Y component of a vector. */
   double z = 0.0; /**< Z component of a vector. */
-} k4a_double3_t;
+};
 
 /** IMU sample in double precision.
  *
@@ -63,13 +63,13 @@ typedef struct _k4a_double3_t
  * </requirements>
  * \endxmlonly
  */
-typedef struct _k4a_imu_accumulator_t
+struct k4a_imu_accumulator_t
 {
   double temperature = 0.0;  /**< Temperature reading of this sample (Celsius). */
   k4a_double3_t acc_sample;  /**< Accelerometer sample in meters per second squared. */
   k4a_double3_t gyro_sample; /**< Gyro sample in radians per second. */
 
-  _k4a_imu_accumulator_t& operator+=(const k4a_imu_sample_t& a)
+  k4a_imu_accumulator_t& operator+=(const k4a_imu_sample_t& a)
   {
     temperature += a.temperature;
     acc_sample.x += a.acc_sample.xyz.x;
@@ -81,7 +81,7 @@ typedef struct _k4a_imu_accumulator_t
     return *this;
   }
 
-  _k4a_imu_accumulator_t& operator/=(float div)
+  k4a_imu_accumulator_t& operator/=(float div)
   {
     temperature /= div;
     acc_sample.x /= div;
@@ -103,7 +103,7 @@ typedef struct _k4a_imu_accumulator_t
     sample.gyro_sample.xyz.y = static_cast<float>(gyro_sample.y);
     sample.gyro_sample.xyz.z = static_cast<float>(gyro_sample.z);
   }
-} k4a_imu_accumulator_t;
+};
 
 /** Reduces the IMU output rate by averaging groups of consecutive samples.
  *
