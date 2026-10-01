@@ -58,26 +58,16 @@ K4AROSDevice::K4AROSDevice()
   static const std::string compressed_format = "/compressed/format";
   static const std::string compressed_png_level = "/compressed/png_level";
 
-  // Declare node parameters
-  this->declare_parameter("depth_enabled", rclcpp::ParameterValue(true));
-  this->declare_parameter("depth_mode", rclcpp::ParameterValue("NFOV_UNBINNED"));
-  this->declare_parameter("color_enabled", rclcpp::ParameterValue(false));
-  this->declare_parameter("color_format", rclcpp::ParameterValue("bgra"));
-  this->declare_parameter("color_resolution", rclcpp::ParameterValue("720P"));
-  this->declare_parameter("fps", rclcpp::ParameterValue(5));
-  this->declare_parameter("point_cloud", rclcpp::ParameterValue(true));
-  this->declare_parameter("rgb_point_cloud", rclcpp::ParameterValue(false));
-  this->declare_parameter("point_cloud_in_depth_frame", rclcpp::ParameterValue(true));
-  this->declare_parameter("sensor_sn", rclcpp::ParameterValue(""));
-  this->declare_parameter("recording_file", rclcpp::ParameterValue(""));
-  this->declare_parameter("recording_loop_enabled", rclcpp::ParameterValue(false));
-  this->declare_parameter("body_tracking_enabled", rclcpp::ParameterValue(false));
-  this->declare_parameter("body_tracking_smoothing_factor", rclcpp::ParameterValue(0.0f));
-  this->declare_parameter("rescale_ir_to_mono8", rclcpp::ParameterValue(false));
-  this->declare_parameter("ir_mono8_scaling_factor", rclcpp::ParameterValue(1.0f));
-  this->declare_parameter("imu_rate_target", rclcpp::ParameterValue(0));
-  this->declare_parameter("wired_sync_mode", rclcpp::ParameterValue(0));
-  this->declare_parameter("subordinate_delay_off_master_usec", rclcpp::ParameterValue(0));
+  // Declare node parameters from the single list that also defines their defaults and help
+#define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val)     \
+  {                                                                                      \
+    rcl_interfaces::msg::ParameterDescriptor descriptor;                                 \
+    descriptor.description = param_help_string;                                          \
+    this->declare_parameter(#param_variable, rclcpp::ParameterValue(param_default_val),  \
+      descriptor);                                                                       \
+  }
+  ROS_PARAM_LIST
+#undef LIST_ENTRY
 
   // Collect ROS parameters from the param server or from the command line
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) \
