@@ -113,8 +113,8 @@ class K4AROSDevice : public rclcpp::Node
   // available.
   void initializeTimestampOffset(const std::chrono::microseconds& k4a_device_timestamp_us);
 
-  // When using IMU throttling, computes a mean measurement from a set of IMU samples
-  k4a_imu_sample_t computeMeanIMUSample(const std::vector<k4a_imu_sample_t>& samples);
+  // Converts an IMU sample to a message and publishes it
+  void publishImuSample(const k4a_imu_sample_t& sample);
 
   void printTimestampDebugMessage(const std::string& name, const rclcpp::Time& timestamp);
 

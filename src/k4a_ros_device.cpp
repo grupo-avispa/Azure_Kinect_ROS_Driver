@@ -7,6 +7,7 @@
 
 // System headers
 //
+#include <cfloat>
 #include <thread>
 #include <iomanip>
 #include <unordered_map>
@@ -1318,80 +1319,41 @@ void K4AROSDevice::bodyPublisherThread()
 }
 #endif
 
-k4a_imu_sample_t K4AROSDevice::computeMeanIMUSample(const std::vector<k4a_imu_sample_t> & samples)
+void K4AROSDevice::publishImuSample(const k4a_imu_sample_t & sample)
 {
-  // Compute mean sample
-  // Using double-precision version of imu sample struct to avoid overflow
-  k4a_imu_accumulator_t mean;
-  for (auto imu_sample : samples) {
-    mean += imu_sample;
+  Imu::SharedPtr imu_msg(new Imu);
+  k4a_result_t result = getImuFrame(sample, imu_msg);
+
+  RCLCPP_ERROR_EXPRESSION(this->get_logger(), result != K4A_RESULT_SUCCEEDED,
+    "Failed to get IMU frame");
+
+  if (std::abs(imu_msg->angular_velocity.x) > DBL_EPSILON ||
+    std::abs(imu_msg->angular_velocity.y) > DBL_EPSILON ||
+    std::abs(imu_msg->angular_velocity.z) > DBL_EPSILON)
+  {
+    imu_orientation_publisher_->publish(*imu_msg);
   }
-  float num_samples = samples.size();
-  mean /= num_samples;
-
-  // Convert to floating point
-  k4a_imu_sample_t mean_float;
-  mean.to_float(mean_float);
-  // Use most timestamp of most recent sample
-  mean_float.acc_timestamp_usec = samples.back().acc_timestamp_usec;
-  mean_float.gyro_timestamp_usec = samples.back().gyro_timestamp_usec;
-
-  return mean_float;
 }
 
 void K4AROSDevice::imuPublisherThread()
 {
   rclcpp::Rate loop_rate(300);
 
-  k4a_result_t result;
   k4a_imu_sample_t sample;
+  k4a_imu_sample_t output;
 
   // For IMU throttling
-  unsigned int count = 0;
-  unsigned int target_count = IMU_MAX_RATE / params_.imu_rate_target;
-  std::vector<k4a_imu_sample_t> accumulated_samples;
-  accumulated_samples.reserve(target_count);
-  bool throttling = target_count > 1;
+  ImuThrottler throttler(IMU_MAX_RATE / params_.imu_rate_target);
 
   while (running_ && rclcpp::ok()) {
     if (k4a_device_) {
       // IMU messages are delivered in batches at 300 Hz. Drain the queue of IMU messages by
       // constantly reading until we get a timeout
-      bool read = false;
-      do{
-        read = k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(0));
-
-        if (read) {
-          if (throttling) {
-            accumulated_samples.push_back(sample);
-            count++;
-          }
-
-          if (count % target_count == 0) {
-            Imu::SharedPtr imu_msg(new Imu);
-
-            if (throttling) {
-              k4a_imu_sample_t mean_sample_float = computeMeanIMUSample(accumulated_samples);
-              result = getImuFrame(mean_sample_float, imu_msg);
-              accumulated_samples.clear();
-              count = 0;
-            } else {
-              result = getImuFrame(sample, imu_msg);
-            }
-
-            RCLCPP_ERROR_EXPRESSION(this->get_logger(), result != K4A_RESULT_SUCCEEDED,
-              "Failed to get IMU frame");
-
-            if (std::abs(imu_msg->angular_velocity.x) > DBL_EPSILON ||
-              std::abs(imu_msg->angular_velocity.y) > DBL_EPSILON ||
-              std::abs(imu_msg->angular_velocity.z) > DBL_EPSILON)
-            {
-              imu_orientation_publisher_->publish(*imu_msg);
-            }
-          }
+      while (k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(0))) {
+        if (throttler.add(sample, output)) {
+          publishImuSample(output);
         }
-
-      } while (read);
+      }
     } else if (k4a_playback_handle_) {
       // publish imu messages as long as the imu timestamp is less than the last capture timestamp to catch up to the
       // cameras compare signed with unsigned shouldn't cause a problem because timestamps should always be positive
@@ -1399,36 +1361,9 @@ void K4AROSDevice::imuPublisherThread()
         std::lock_guard<std::mutex> guard(k4a_playback_handle_mutex_);
         if (!k4a_playback_handle_.get_next_imu_sample(&sample)) {
           imu_stream_end_of_file_ = true;
-        } else {
-          if (throttling) {
-            accumulated_samples.push_back(sample);
-            count++;
-          }
-
-          if (count % target_count == 0) {
-            Imu::SharedPtr imu_msg(new Imu);
-
-            if (throttling) {
-              k4a_imu_sample_t mean_sample_float = computeMeanIMUSample(accumulated_samples);
-              result = getImuFrame(mean_sample_float, imu_msg);
-              accumulated_samples.clear();
-              count = 0;
-            } else {
-              result = getImuFrame(sample, imu_msg);
-            }
-
-            RCLCPP_ERROR_EXPRESSION(this->get_logger(), result != K4A_RESULT_SUCCEEDED,
-              "Failed to get IMU frame");
-
-            if (std::abs(imu_msg->angular_velocity.x) > DBL_EPSILON ||
-              std::abs(imu_msg->angular_velocity.y) > DBL_EPSILON ||
-              std::abs(imu_msg->angular_velocity.z) > DBL_EPSILON)
-            {
-              imu_orientation_publisher_->publish(*imu_msg);
-            }
-
-            last_imu_time_usec_ = sample.acc_timestamp_usec;
-          }
+        } else if (throttler.add(sample, output)) {
+          publishImuSample(output);
+          last_imu_time_usec_ = sample.acc_timestamp_usec;
         }
       }
     }

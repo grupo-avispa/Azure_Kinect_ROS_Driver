@@ -4,6 +4,9 @@
 #ifndef K4A_ROS_TYPES_H
 #define K4A_ROS_TYPES_H
 
+#include <array>
+#include <vector>
+
 #include <k4a/k4atypes.h>
 
 using DepthPixel = uint16_t;
@@ -101,5 +104,54 @@ typedef struct _k4a_imu_accumulator_t
     sample.gyro_sample.xyz.z = static_cast<float>(gyro_sample.z);
   }
 } k4a_imu_accumulator_t;
+
+/** Reduces the IMU output rate by averaging groups of consecutive samples.
+ *
+ * With `samples_per_output <= 1` every sample is passed through unchanged.
+ */
+class ImuThrottler
+{
+public:
+  explicit ImuThrottler(unsigned int samples_per_output) : samples_per_output_(samples_per_output)
+  {
+    samples_.reserve(samples_per_output_);
+  }
+
+  /** Adds a sample. Returns true, and fills `output`, once a full group has been collected. */
+  bool add(const k4a_imu_sample_t& sample, k4a_imu_sample_t& output)
+  {
+    if (samples_per_output_ <= 1)
+    {
+      output = sample;
+      return true;
+    }
+
+    samples_.push_back(sample);
+    if (samples_.size() < samples_per_output_)
+    {
+      return false;
+    }
+
+    // Use the double-precision accumulator to avoid overflow while summing
+    k4a_imu_accumulator_t mean;
+    for (const auto& imu_sample : samples_)
+    {
+      mean += imu_sample;
+    }
+    mean /= static_cast<float>(samples_.size());
+    mean.to_float(output);
+
+    // Use the timestamps of the most recent sample
+    output.acc_timestamp_usec = samples_.back().acc_timestamp_usec;
+    output.gyro_timestamp_usec = samples_.back().gyro_timestamp_usec;
+
+    samples_.clear();
+    return true;
+  }
+
+private:
+  unsigned int samples_per_output_;
+  std::vector<k4a_imu_sample_t> samples_;
+};
 
 #endif  // K4A_ROS_TYPES_H
