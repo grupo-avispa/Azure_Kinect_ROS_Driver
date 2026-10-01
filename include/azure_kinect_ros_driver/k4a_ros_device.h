@@ -85,6 +85,10 @@ class K4AROSDevice : public rclcpp::Node
   k4a_result_t fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
                                    std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud);
 
+  // Runs a publisher thread body, logging and restarting it if it throws (e.g. a k4a::error from
+  // the SDK) instead of letting the exception escape the std::thread and terminate the process.
+  void runGuarded(const char * name, void (K4AROSDevice::*thread_body)());
+
   void framePublisherThread();
 #if defined(K4A_BODY_TRACKING)
   void bodyPublisherThread();

@@ -361,9 +361,11 @@ k4a_result_t K4AROSDevice::startCameras()
   running_ = true;
 
   // Start the thread that will poll the cameras and publish frames
-  frame_publisher_thread_ = thread(&K4AROSDevice::framePublisherThread, this);
+  frame_publisher_thread_ =
+    thread(&K4AROSDevice::runGuarded, this, "camera", &K4AROSDevice::framePublisherThread);
 #if defined(K4A_BODY_TRACKING)
-  body_publisher_thread_ = thread(&K4AROSDevice::bodyPublisherThread, this);
+  body_publisher_thread_ =
+    thread(&K4AROSDevice::runGuarded, this, "body", &K4AROSDevice::bodyPublisherThread);
 #endif
 
   return K4A_RESULT_SUCCEEDED;
@@ -377,7 +379,8 @@ k4a_result_t K4AROSDevice::startImu()
   }
 
   // Start the IMU publisher thread
-  imu_publisher_thread_ = thread(&K4AROSDevice::imuPublisherThread, this);
+  imu_publisher_thread_ =
+    thread(&K4AROSDevice::runGuarded, this, "IMU", &K4AROSDevice::imuPublisherThread);
 
   return K4A_RESULT_SUCCEEDED;
 }
@@ -856,6 +859,24 @@ k4a_result_t K4AROSDevice::renderBodyIndexMapToROS(
   return K4A_RESULT_SUCCEEDED;
 }
 #endif
+
+void K4AROSDevice::runGuarded(const char * name, void (K4AROSDevice::*thread_body)())
+{
+  while (running_ && rclcpp::ok()) {
+    try {
+      (this->*thread_body)();
+      return;
+    } catch (const std::exception & e) {
+      // Exceptions are expected while shutting down (e.g. the context becomes invalid)
+      if (!running_ || !rclcpp::ok()) {
+        return;
+      }
+      RCLCPP_ERROR(this->get_logger(), "Exception in the %s thread, restarting it: %s", name,
+        e.what());
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+  }
+}
 
 void K4AROSDevice::framePublisherThread()
 {
