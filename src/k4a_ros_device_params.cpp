@@ -15,14 +15,14 @@
 // Project headers
 //
 
-K4AROSDeviceParams::K4AROSDeviceParams() : rclcpp::Node("k4a_ros_device_params_node") {}
+K4AROSDeviceParams::K4AROSDeviceParams(rclcpp::Logger logger) : logger_(logger) {}
 
 k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* configuration)
 {
   configuration->depth_delay_off_color_usec = 0;
   configuration->disable_streaming_indicator = false;
 
-  RCLCPP_INFO_STREAM(this->get_logger(), "Setting wired sync mode: " << wired_sync_mode);
+  RCLCPP_INFO_STREAM(logger_, "Setting wired sync mode: " << wired_sync_mode);
   if (wired_sync_mode == 0)
   {
       configuration->wired_sync_mode = K4A_WIRED_SYNC_MODE_STANDALONE;
@@ -37,23 +37,23 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
   }
   else
   {
-      RCLCPP_ERROR_STREAM(this->get_logger(),"Invalid wired sync mode: " << wired_sync_mode);
+      RCLCPP_ERROR_STREAM(logger_,"Invalid wired sync mode: " << wired_sync_mode);
       return K4A_RESULT_FAILED;
   }
 
 
-  RCLCPP_INFO_STREAM(this->get_logger(),"Setting subordinate delay: " << subordinate_delay_off_master_usec);
+  RCLCPP_INFO_STREAM(logger_,"Setting subordinate delay: " << subordinate_delay_off_master_usec);
   configuration->subordinate_delay_off_master_usec = subordinate_delay_off_master_usec;
 
   if (!color_enabled)
   {
-    RCLCPP_INFO_STREAM(this->get_logger(),"Disabling RGB Camera");
+    RCLCPP_INFO_STREAM(logger_,"Disabling RGB Camera");
 
     configuration->color_resolution = K4A_COLOR_RESOLUTION_OFF;
   }
   else
   {
-    RCLCPP_INFO_STREAM(this->get_logger(),"Setting RGB Camera Format: " << color_format);
+    RCLCPP_INFO_STREAM(logger_,"Setting RGB Camera Format: " << color_format);
 
     if (color_format == "jpeg")
     {
@@ -65,11 +65,11 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
     }
     else
     {
-      RCLCPP_ERROR_STREAM(this->get_logger(),"Invalid RGB Camera Format: " << color_format);
+      RCLCPP_ERROR_STREAM(logger_,"Invalid RGB Camera Format: " << color_format);
       return K4A_RESULT_FAILED;
     }
 
-    RCLCPP_INFO_STREAM(this->get_logger(),"Setting RGB Camera Resolution: " << color_resolution);
+    RCLCPP_INFO_STREAM(logger_,"Setting RGB Camera Resolution: " << color_resolution);
 
     if (color_resolution == "720P")
     {
@@ -97,20 +97,20 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
     }
     else
     {
-      RCLCPP_ERROR_STREAM(this->get_logger(),"Invalid RGB Camera Resolution: " << color_resolution);
+      RCLCPP_ERROR_STREAM(logger_,"Invalid RGB Camera Resolution: " << color_resolution);
       return K4A_RESULT_FAILED;
     }
   }
 
   if (!depth_enabled)
   {
-    RCLCPP_INFO_STREAM(this->get_logger(),"Disabling Depth Camera");
+    RCLCPP_INFO_STREAM(logger_,"Disabling Depth Camera");
 
     configuration->depth_mode = K4A_DEPTH_MODE_OFF;
   }
   else
   {
-    RCLCPP_INFO_STREAM(this->get_logger(),"Setting Depth Camera Mode: " << depth_mode);
+    RCLCPP_INFO_STREAM(logger_,"Setting Depth Camera Mode: " << depth_mode);
 
     if (depth_mode == "NFOV_2X2BINNED")
     {
@@ -134,12 +134,12 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
     }
     else
     {
-      RCLCPP_ERROR_STREAM(this->get_logger(),"Invalid Depth Camera Mode: " << depth_mode);
+      RCLCPP_ERROR_STREAM(logger_,"Invalid Depth Camera Mode: " << depth_mode);
       return K4A_RESULT_FAILED;
     }
   }
 
-  RCLCPP_INFO_STREAM(this->get_logger(),"Setting Camera FPS: " << fps);
+  RCLCPP_INFO_STREAM(logger_,"Setting Camera FPS: " << fps);
 
   if (fps == 5)
   {
@@ -155,7 +155,7 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
   }
   else
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Invalid Camera FPS: " << fps);
+    RCLCPP_ERROR_STREAM(logger_,"Invalid Camera FPS: " << fps);
     return K4A_RESULT_FAILED;
   }
 
@@ -172,28 +172,28 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
   // Ensure that the "point_cloud" option is not used with passive IR mode, since they are incompatible
   if (point_cloud && (configuration->depth_mode == K4A_DEPTH_MODE_PASSIVE_IR))
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: cannot generate point cloud if depth camera is using PASSIVE_IR mode.");
+    RCLCPP_ERROR_STREAM(logger_,"Incompatible options: cannot generate point cloud if depth camera is using PASSIVE_IR mode.");
     return K4A_RESULT_FAILED;
   }
 
   // Ensure that point_cloud is enabled if using rgb_point_cloud
   if (rgb_point_cloud && !point_cloud)
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: cannot generate RGB point cloud if point_cloud is not enabled.");
+    RCLCPP_ERROR_STREAM(logger_,"Incompatible options: cannot generate RGB point cloud if point_cloud is not enabled.");
     return K4A_RESULT_FAILED;
   }
 
   // Ensure that color camera is enabled when generating a color point cloud
   if (rgb_point_cloud && !color_enabled)
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: cannot generate RGB point cloud if color camera is not enabled.");
+    RCLCPP_ERROR_STREAM(logger_,"Incompatible options: cannot generate RGB point cloud if color camera is not enabled.");
     return K4A_RESULT_FAILED;
   }
 
   // Ensure that color image contains RGB pixels instead of compressed JPEG data.
   if (rgb_point_cloud && color_format == "jpeg")
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: cannot generate RGB point cloud if color format is JPEG.");
+    RCLCPP_ERROR_STREAM(logger_,"Incompatible options: cannot generate RGB point cloud if color format is JPEG.");
     return K4A_RESULT_FAILED;
   }
 
@@ -206,12 +206,12 @@ k4a_result_t K4AROSDeviceParams::ValidateImuRate()
   if (imu_rate_target == 0)
   {
     imu_rate_target = IMU_MAX_RATE;
-    RCLCPP_INFO_STREAM(this->get_logger(),"Using default IMU rate. Setting to maximum: " << IMU_MAX_RATE << " Hz.");
+    RCLCPP_INFO_STREAM(logger_,"Using default IMU rate. Setting to maximum: " << IMU_MAX_RATE << " Hz.");
   }
 
   if (imu_rate_target < 0 || imu_rate_target > IMU_MAX_RATE)
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: desired IMU rate of " << imu_rate_target << " is not supported.");
+    RCLCPP_ERROR_STREAM(logger_,"Incompatible options: desired IMU rate of " << imu_rate_target << " is not supported.");
     return K4A_RESULT_FAILED;
   }
 
@@ -220,24 +220,15 @@ k4a_result_t K4AROSDeviceParams::ValidateImuRate()
   // Since we will throttle the IMU by averaging div samples together, this is the
   // achievable rate when rouded to the nearest whole number div.
 
-  RCLCPP_INFO_STREAM(this->get_logger(),"Setting Target IMU rate to " << imu_rate_rounded << " (desired: " << imu_rate_target << ")");
+  RCLCPP_INFO_STREAM(logger_,"Setting Target IMU rate to " << imu_rate_rounded << " (desired: " << imu_rate_target << ")");
 
   return K4A_RESULT_SUCCEEDED;
-}
-
-void K4AROSDeviceParams::Help()
-{
-#define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val)                                   \
-  RCLCPP_INFO(this->get_logger(),"#param_variable - #param_type : param_help_string (#param_default_val)");
-
-  ROS_PARAM_LIST
-#undef LIST_ENTRY
 }
 
 void K4AROSDeviceParams::Print()
 {
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val)                                   \
-  RCLCPP_INFO_STREAM(this->get_logger(),"" << #param_variable << " - " << #param_type " : " << param_variable);
+  RCLCPP_INFO_STREAM(logger_,"" << #param_variable << " - " << #param_type " : " << param_variable);
 
   ROS_PARAM_LIST
 #undef LIST_ENTRY

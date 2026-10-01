@@ -84,10 +84,11 @@
               "Delay subordinate camera off master camera by specified amount in usec.",                               \
               int, 0)
 
-class K4AROSDeviceParams : public rclcpp::Node
+class K4AROSDeviceParams
 {
 public:
-  K4AROSDeviceParams();
+  // The logger is the one of the node that owns the parameters
+  explicit K4AROSDeviceParams(rclcpp::Logger logger);
 
   // Get a device configuration from a a set of parameters
   k4a_result_t GetDeviceConfig(k4a_device_configuration_t* configuration);
@@ -97,9 +98,6 @@ public:
   // configuration, since the IMU thread runs both with a device and with a recording.
   k4a_result_t ValidateImuRate();
 
-  // Print help messages to the console
-  void Help();
-
   // Print the value of all parameters
   void Print();
 
@@ -107,6 +105,9 @@ public:
 #define LIST_ENTRY(param_variable, param_help_string, param_type, param_default_val) param_type param_variable;
   ROS_PARAM_LIST
 #undef LIST_ENTRY
+
+private:
+  rclcpp::Logger logger_;
 };
 
 #endif  // K4A_ROS_DEVICE_PARAMS_H

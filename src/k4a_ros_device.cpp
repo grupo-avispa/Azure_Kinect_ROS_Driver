@@ -133,7 +133,9 @@ size_t subscriberCount(const image_transport::Publisher & publisher)
 
 K4AROSDevice::K4AROSDevice()
 : Node("k4a_ros_device_node"),
+  params_(this->get_logger()),
   k4a_device_(nullptr),
+  calibration_data_(this),
   k4a_playback_handle_(nullptr),
 // clang-format off
 #if defined(K4A_BODY_TRACKING)
@@ -1253,8 +1255,6 @@ void K4AROSDevice::framePublisherThread()
     } else {
       consecutive_failures = 0;
     }
-
-    rclcpp::spin_some(shared_from_this());
 
     // With a device, get_capture() already blocks until the next frame arrives. Sleeping on top
     // of that adds up to a frame period of latency and lets captures queue up in the SDK. The

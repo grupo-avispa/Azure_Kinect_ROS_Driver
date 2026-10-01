@@ -26,10 +26,11 @@
 //
 #include "azure_kinect_ros_driver/k4a_ros_device_params.h"
 
-class K4ACalibrationTransformData : public rclcpp::Node
+class K4ACalibrationTransformData
 {
 public:
-  K4ACalibrationTransformData();
+  // The node provides the logger, the clock and the transform broadcaster. It must outlive this object.
+  explicit K4ACalibrationTransformData(rclcpp::Node* node);
   void initialize(const k4a::device& device, const k4a_depth_mode_t depthMode, const k4a_color_resolution_t resolution,
                   const K4AROSDeviceParams& params);
   void initialize(const k4a::playback& k4a_playback_handle, const K4AROSDeviceParams& params);
@@ -74,6 +75,7 @@ private:
   tf2::Quaternion getDepthToBaseRotationCorrection();
   tf2::Vector3 getDepthToBaseTranslationCorrection();
 
+  rclcpp::Node* node_;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
 };
 
