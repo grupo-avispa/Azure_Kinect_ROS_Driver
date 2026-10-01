@@ -30,6 +30,7 @@ int main(int argc, char** argv)
   if (result != K4A_RESULT_SUCCEEDED)
   {
     RCLCPP_ERROR_STREAM(node->get_logger(),"Failed to start cameras");
+    rclcpp::shutdown();
     return -1;
   }
 
@@ -37,6 +38,7 @@ int main(int argc, char** argv)
   if (result != K4A_RESULT_SUCCEEDED)
   {
     RCLCPP_ERROR_STREAM(node->get_logger(),"Failed to start IMU");
+    rclcpp::shutdown();
     return -2;
   }
 

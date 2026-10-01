@@ -270,22 +270,26 @@ K4AROSDevice::~K4AROSDevice()
   // Start tearing down the publisher threads
   running_ = false;
 
+  // The threads only exist if the cameras and the IMU were started successfully
 #if defined(K4A_BODY_TRACKING)
-  // Join the publisher thread
-  RCLCPP_INFO(this->get_logger(), "Joining body publisher thread");
-  body_publisher_thread_.join();
-  RCLCPP_INFO(this->get_logger(), "Body publisher thread joined");
+  if (body_publisher_thread_.joinable()) {
+    RCLCPP_INFO(this->get_logger(), "Joining body publisher thread");
+    body_publisher_thread_.join();
+    RCLCPP_INFO(this->get_logger(), "Body publisher thread joined");
+  }
 #endif
 
-  // Join the publisher thread
-  RCLCPP_INFO(this->get_logger(), "Joining camera publisher thread");
-  frame_publisher_thread_.join();
-  RCLCPP_INFO(this->get_logger(), "Camera publisher thread joined");
+  if (frame_publisher_thread_.joinable()) {
+    RCLCPP_INFO(this->get_logger(), "Joining camera publisher thread");
+    frame_publisher_thread_.join();
+    RCLCPP_INFO(this->get_logger(), "Camera publisher thread joined");
+  }
 
-  // Join the publisher thread
-  RCLCPP_INFO(this->get_logger(), "Joining IMU publisher thread");
-  imu_publisher_thread_.join();
-  RCLCPP_INFO(this->get_logger(), "IMU publisher thread joined");
+  if (imu_publisher_thread_.joinable()) {
+    RCLCPP_INFO(this->get_logger(), "Joining IMU publisher thread");
+    imu_publisher_thread_.join();
+    RCLCPP_INFO(this->get_logger(), "IMU publisher thread joined");
+  }
 
   stopCameras();
   stopImu();
@@ -305,6 +309,12 @@ k4a_result_t K4AROSDevice::startCameras()
 {
   k4a_device_configuration_t k4a_configuration = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
   k4a_result_t result = params_.GetDeviceConfig(&k4a_configuration);
+
+  if (!k4a_device_ && !k4a_playback_handle_) {
+    RCLCPP_ERROR(this->get_logger(),
+      "Neither a K4A device nor a recording is open. Not starting camera!");
+    return K4A_RESULT_FAILED;
+  }
 
   if (k4a_device_) {
     if (result != K4A_RESULT_SUCCEEDED) {
