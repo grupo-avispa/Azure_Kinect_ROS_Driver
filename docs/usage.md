@@ -28,7 +28,19 @@ Once Rviz2 launches change "Fixed Frame" to "camera_body". Visualize the image s
 
 ### Parameters
 
-The driver is a single ROS node named `k4a_ros_device_node`.
+The driver is a single managed (lifecycle) node named `k4a_ros_device_node`, which is also a composable component (`azure_kinect_ros_driver::K4ADriverNode`).
+
+By default (`autostart` set to `true`) the node configures and activates itself as soon as it is created, so it behaves like any other driver. It can also be driven with the lifecycle transitions, for example to release the camera without stopping the process or to change the parameters:
+
+```
+ros2 lifecycle set /k4a_ros_device_node deactivate   # stops the cameras, the topics stay
+ros2 lifecycle set /k4a_ros_device_node cleanup      # closes the device and removes the topics
+ros2 param set /k4a_ros_device_node fps 15
+ros2 lifecycle set /k4a_ros_device_node configure
+ros2 lifecycle set /k4a_ros_device_node activate
+```
+
+The parameters are read when the node is configured. If the camera stops delivering captures, or the recording ends, the node goes back to the unconfigured state by itself.
 
 The Azure Kinect ROS Driver node accepts a number of [ROS Parameters](http://wiki.ros.org/Parameter%20Server) to configure the Azure Kinect DK sensor. Since the node uses the ROS parameter server, these parameters can be set in the usual ROS ways (on the command line, in a launch file, through the parameter server, etc..).
 
@@ -46,6 +58,8 @@ The node accepts the following parameters:
 - `rgb_point_cloud` (bool) : Defaults to `false`. If this parameter is set to `true`, the node will generate a sensor_msgs::PointCloud2 message from the depth camera data and colorize it using the color camera data. This requires that the `point_cloud` parameter be `true`, and the `color_enabled` parameter be `true`.
 - `tf_prefix` (string) : Defaults to an empty string. Prefix prepended to the name of every TF frame published by the node (for example `k4a_` gives `k4a_depth_camera_link`), which allows running several cameras.
 - `point_cloud_in_depth_frame` (bool) : Defaults to `true`. Whether the RGB pointcloud is rendered in the depth frame (true) or RGB frame (false). Will either match the resolution of the depth camera (true) or the RGB camera (false).
+- `autostart` (bool) : Defaults to `true`. Configure and activate the node as soon as it is created. Set it to `false` to drive the node with lifecycle transitions.
+- `shutdown_on_stop` (bool) : Defaults to `false`. Shut the whole process down when the node stops by itself because the recording ended or an error happened. The `node` executable sets it to `true`; leave it `false` when the node is composed in a container with other nodes.
 - `recording_file` (string) : No default value. If this parameter contains a valid absolute path to a k4arecording file, the node will use the playback api with this file instead of opening a device.
 - `recording_loop_enabled` (bool) : Defaults to `false`. If this parameter is set to `true`, the node will rewind the recording file to the beginning after reaching the last frame. Otherwise the node will stop working after reaching the end of the recording file.
 - `body_tracking_enabled` (bool) : Defaults to `false`. If this parameter is set to `true`, the node will generate visualization_msgs::MarkerArray messages for the body tracking data. This requires that the `depth_enabled` parameter is set to `true` and an installed azure kinect body tracking sdk.
@@ -67,7 +81,7 @@ Some example incompatibilities are provided here:
 
 ## Topics
 
-The node emits a variety of topics into its namespace. Only the streams that the configuration can produce are advertised (for example, nothing related to the color camera when `color_enabled` is `false`), and a stream is only computed while something subscribes to it or to its `camera_info`. The image topics also publish through every `image_transport` plugin that is installed (`compressed`, ...).
+The node emits a variety of topics into its namespace. Only the streams that the configuration can produce are advertised (for example, nothing related to the color camera when `color_enabled` is `false`), and a stream is only computed while something subscribes to it or to its `camera_info`. The messages are published by `unique_ptr`, so subscribers in the same process (see [Running in a container](#running-in-a-container-with-intra-process-communication)) receive them without any copy. The QoS of every topic can be changed with the `qos_overrides` parameters of the node, for example `qos_overrides./depth/image_raw.publisher.reliability`. The driver does not use `image_transport` any more (it does not work with lifecycle nodes in Jazzy), so it only publishes the raw topics below; the `compressed`, `compressedDepth` and `theora` topics are obtained with an `image_transport` republisher, which `driver_composable.launch.py` can load for you.
 
 - `points2` (`sensor_msgs::PointCloud2`) : The point cloud generated by the Azure Kinect Sensor SDK from the depth camera data. If the `rgb_point_cloud` option is set, the points in the cloud will be colorized using information from the color camera.
 - `rgb/image_raw` (`sensor_msgs::Image`) : The raw image from the color camera, in BGRA format (only with `color_format` set to `bgra`; with `jpeg` the images are published on `rgb/image_raw/compressed` instead). Note that this image is **not** undistorted. The image can be undistorted using the [image_proc package](http://wiki.ros.org/image_proc).
@@ -80,10 +94,22 @@ The node emits a variety of topics into its namespace. Only the streams that the
 - `rgb_to_depth/camera_info` (`sensor_msgs::CameraInfo`) : A copy of the depth camera calibration which has been modified to match the color camera co-ordinate frame. The color camera image provided by `rgb_to_depth/image_raw` is distorted in the same way as the depth camera image provided by `depth/image_raw`. Correctly undistorting this image require the use of the depth camera calibration, which is provided on this topic.
 - `ir/image_raw` (`sensor_msgs::Image`) : The raw infrared image from the depth camera sensor. In most depth modes, this image will be illuminated by the infrared illuminator built into the Azure Kinect DK. In `PASSIVE_IR` mode, this image will not be illuminated by the Azure Kinect DK. The encoding is uint16 by default, can be changed to be uint8 using the `rescale_ir_to_mono8` parameter.
 - `ir/camera_info` (`sensor_msgs::CameraInfo`) : Calibration information for the infrared camera, converted from the Azure Kinect Sensor SDK format. Since the depth camera and infrared camera are physically the same camera, this `camera_info` is a copy of the camera info published for the depth camera.
+- `temperature` (`sensor_msgs::Temperature`) : The temperature of the IMU, once per second.
+- `/diagnostics` (`diagnostic_msgs::DiagnosticArray`) : The health of the driver, with the hardware id set to the serial number. Three tasks are reported: `K4A device` (serial number, firmware versions, captures received and with failed streams, IMU samples, temperature, clock offset resynchronizations, time since the last capture), `K4A capture rate` and `K4A IMU rate` (measured against the expected rate). An error is reported if the device stops delivering captures or the driver failed.
 - `imu` (`sensor_msgs::Imu`) : The intrinsics-corrected IMU sensor stream, provided by the Azure Kinect Sensor SDK. The sensor SDK automatically corrects for IMU intrinsics before sensor data is emitted.
 - `body_tracking_data` (`visualization_msgs::MarkerArray`) : Topic for receiving body tracking data. Each message contains all joints for all bodies for the most recent depth image. The markers are grouped by the [body id](https://microsoft.github.io/Azure-Kinect-Body-Tracking/release/0.9.x/structk4abt__body__t.html#a38fed6c7125f92b41165ffe2e1da9dd4) and the joints are in the same order as in the [joint enum of body tracking sdk](https://microsoft.github.io/Azure-Kinect-Body-Tracking/release/0.9.x/group__btenums.html#ga5fe6fa921525a37dec7175c91c473781). The id field of a marker is calculated by: `body_id * 100 + joint_index` where body_id is the corresponding body id from the body tracking sdk and the joint index is analogue to enum value for joints in the body tracking sdk. Subscribers can calculate the body.id by `floor(marker.id / 100)` and the joint_index by `marker.id % 100`.
 - `body_index_map/image_raw` (`sensor_msgs::Image`) : The [body index map](https://docs.microsoft.com/de-de/azure/Kinect-dk/body-index-map) represented as mono8 image with a background value of 255.
 Up until body id 254 the pixel values of detected bodies will be equal to their corresponding body id. Afterwards the pixel value of detected bodies will be calculated as `body_id % 255` and therefore can only be used for segmentation without a relation to the body id.
+
+## Running in a container with intra-process communication
+
+`launch/driver_composable.launch.py` loads the driver in a `component_container_mt` with `use_intra_process_comms` enabled. Components loaded in the same container with the same option (for example from your own launch file, using `extra_arguments=[{'use_intra_process_comms': True}]`) receive the images, camera infos, IMU and point clouds of the driver as the very same message object, with no serialization and no copy. The driver counts those subscribers, so it generates a stream when only a component of its own container asks for it.
+
+```
+ros2 launch azure_kinect_ros_driver driver_composable.launch.py fps:=15 color_resolution:=720P
+```
+
+The launch file takes the main parameters as arguments, plus `autostart` and `container_name`. With `republish_rgb_compressed:=true` it also loads an `image_transport::Republisher` in the container, which publishes `rgb/image_raw/compressed`.
 
 ## Azure Kinect Developer Kit Calibration
 

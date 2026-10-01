@@ -8,66 +8,90 @@ based on `Keep a Changelog <https://keepachangelog.com/>`_ and the package follo
 [Unreleased]
 ------------
 
-No tests were added: the package has none yet. Changes were checked on a Jetson with an Azure
-Kinect DK (ROS 2 Jazzy, Azure Kinect Sensor SDK 1.4) using live captures and a recording.
+Changes were checked on a Jetson with an Azure Kinect DK (ROS 2 Jazzy, Azure Kinect Sensor SDK
+1.4) using live captures and a recording. 61 tests were added, all in ``test/``:
+``test_conversions`` (13), ``test_clock_synchronizer`` (10), ``test_params`` (10),
+``test_driver_diagnostics`` (13) and ``test_driver_node`` (15). They need no camera and no graphical
+session.
 
 Added
 ^^^^^
 
-* ``ImuThrottler`` in ``k4a_ros_types.h``: the IMU averaging throttle, shared by the device and
-  the recording paths.
-* ``K4AROSDeviceParams::ValidateImuRate()``: validates ``imu_rate_target`` and replaces ``0`` by
-  ``IMU_MAX_RATE``, independently of the device configuration.
-* ``K4AROSDevice::runGuarded()``, ``publishImageWithInfo()`` and ``publishImuSample()``.
-* ``CHANGELOG.rst``.
+* ``K4ADriverNode`` (``k4a_driver_node.h``, ``k4a_driver_streams.cpp``,
+  ``k4a_driver_body_tracking.cpp``): the driver as an ``rclcpp_lifecycle::LifecycleNode`` registered
+  as the component ``azure_kinect_ros_driver::K4ADriverNode``. ``configure`` opens the source and
+  creates the publishers, ``activate`` starts the cameras and the threads, ``deactivate`` and
+  ``cleanup`` undo them, and the node can be reconfigured with other parameters.
+* Parameters ``autostart`` (default ``true``) and ``shutdown_on_stop`` (default ``false``, set by the
+  ``node`` executable) in ``ROS_PARAM_LIST``.
+* Intra-process communication: the messages are published by ``unique_ptr`` with
+  ``rclcpp_lifecycle::LifecyclePublisher``, ``subscriberCount()`` (``subscriber_count.h``) counts the
+  subscribers of the same process, and ``launch/driver_composable.launch.py`` loads the node in a
+  ``component_container_mt`` with ``use_intra_process_comms``. With ``republish_rgb_compressed`` it also
+  loads an ``image_transport::Republisher``. The ``qos_overrides`` parameters can change the QoS of
+  every topic.
+* ``DriverDiagnostics`` (``driver_diagnostics.h``) and the ``/diagnostics`` topic with the tasks
+  ``K4A device``, ``K4A capture rate`` and ``K4A IMU rate``, and the ``temperature`` topic
+  (``sensor_msgs/Temperature``).
+* ``azure_kinect_ros_driver::conversions`` (``k4a_conversions.h``): ``depthToImage()``,
+  ``irToImage()``, ``bgraToImage()``, ``jpegToCompressed()``, ``pointCloudToMsg()``,
+  ``cameraInfoFromCalibration()`` and ``parseDepthUnit()``, which build the ROS messages without
+  ``cv_bridge``.
+* ``ClockSynchronizer`` (``clock_synchronizer.h``), the device-to-realtime clock estimation, with
+  injectable clocks.
+* ``CaptureSource`` (``capture_source.h``) with ``DeviceSource`` and ``PlaybackSource``, and
+  ``makeCaptureSource()``. ``adaptParamsToRecording()`` adapts the parameters to a recording.
+* ``ImuThrottler`` (``k4a_ros_types.h``) and ``K4AROSDeviceParams::ValidateImuRate()``.
+* ``FakeCaptureSource`` (``test/fake_capture_source.h``) and the calibration of a real device
+  (``test/data/k4a_calibration.json``, serial number zeroed) to test the node without hardware.
+* Library targets ``azure_kinect_ros_driver_core`` (static) and ``azure_kinect_ros_driver_component``
+  (shared) in ``CMakeLists.txt``, and ``CHANGELOG.rst``.
 
 Changed
-^^^^^^^^
+^^^^^^^
 
-* The driver is a single ROS node (``k4a_ros_device_node``). ``K4AROSDeviceParams`` and
-  ``K4ACalibrationTransformData`` no longer inherit from ``rclcpp::Node``, the empty
-  ``k4a_bridge`` node was removed and ``main`` spins the device node, so the camera thread no
-  longer calls ``spin_some()``.
-* Parameters are declared from ``ROS_PARAM_LIST`` with their help string as description. As a
-  result ``depth_unit`` and ``tf_prefix`` can now be set; before they were silently ignored.
-* Only the streams that the configuration can produce are advertised (``depth/*``, ``ir/*``,
-  ``depth_to_rgb/*``, ``rgb/*``, ``rgb_to_depth/*``). The duplicated advertisement of
-  ``depth/image_raw`` was removed.
-* A frame that fails to render is skipped with a throttled warning instead of calling
-  ``rclcpp::shutdown()``; the node gives up after 30 consecutive failed captures.
-* Subscribers are counted through the publishers, so subscribers of
-  ``<topic>/compressed`` (or any ``image_transport`` plugin) now trigger frame generation.
-* ``getRbgFrame()`` renamed to ``getRgbFrame()``.
-* The IMU thread blocks on the first sample of a batch instead of polling at 300 Hz when a
-  device is used.
-* The calibration dump is logged at debug level.
-* Build: C++17, ``package.xml`` format 3 with the launch dependencies as ``exec_depend``.
-
-Fixed
-^^^^^
-
-* ``K4AROSDevice`` no longer leaks an ``ImageTransport`` nor creates a second ``shared_ptr``
-  control block from ``this``.
-* ``running_`` and the device-to-realtime clock offset are atomic.
-* Exceptions escaping the camera, IMU and body threads no longer call ``std::terminate``; the
-  thread body is logged and restarted. This also removes an abort seen when stopping the node
-  while ``count_subscribers()`` ran on an invalid context.
-* The node exits with an error code when no device or recording can be opened, or when the
-  device configuration is invalid, instead of staying idle or aborting in the destructor.
-* A zero or invalid ``imu_rate_target`` no longer causes a division by zero in the IMU thread.
-* Playback: the ROS time stays monotonic when ``recording_loop_enabled`` rewinds the recording
-  (it used to jump back by the length of the recording), the parameters are printed, and a
-  recording that cannot be opened is reported instead of throwing from the constructor.
-* ``getBodyMarker()`` used ``rclcpp::Duration(0.25)``, which does not compile; it now uses
-  ``Duration::from_seconds(0.25)``. This code is only built with the Body Tracking SDK and was
-  not compiled here.
-* ``driver.launch.py`` writes the generated URDF to a temporary directory instead of the
-  install space.
+* ``K4AROSDevice`` and the empty ``k4a_bridge`` node were replaced by ``K4ADriverNode``; the process has a
+  single node. ``K4AROSDeviceParams`` and ``K4ACalibrationTransformData`` no longer inherit from
+  ``rclcpp::Node`` and the members of ``K4AROSDeviceParams`` have their default values.
+* Errors of the streaming threads no longer shut the process down: they ask the node to stop and it goes
+  back to the unconfigured state. The ``node`` executable still ends the process, with exit code ``-1`` if
+  the driver failed.
+* Parameters are declared from ``ROS_PARAM_LIST`` with their help string as description. As a result
+  ``depth_unit`` and ``tf_prefix`` can now be set; before they were silently ignored. ``depth_unit`` is
+  validated on configure.
+* Only the streams that the configuration can produce are advertised. A frame that fails to render is
+  skipped with a throttled warning, and the driver gives up after 30 consecutive failed captures.
+* The SDK transformation is only created if a stream needs it.
+* The IMU thread blocks on the first sample of a batch instead of polling at 300 Hz; the calibration dump
+  is logged at debug level; ``getRbgFrame()`` was renamed.
+* Build: C++17, ``package.xml`` format 3, ``.clang-format`` rewritten (Allman braces, 100 columns).
 
 Removed
 ^^^^^^^
 
-* ``launch/rectify_test.launch`` and ``launch/slam_rtabmap.launch`` (ROS 1 nodelet launch
-  files that cannot run on ROS 2).
-* ``K4AROSDeviceParams::Help()``, which was never called and printed its macro arguments
-  literally.
+* The ``image_transport`` and ``cv_bridge`` dependencies. ``image_transport`` does not work with lifecycle
+  nodes in Jazzy, so the driver no longer publishes the ``compressed``, ``compressedDepth`` and ``theora``
+  topics generated by its plugins. The raw topics keep their names, the JPEG color format still publishes
+  ``rgb/image_raw/compressed``, and the other transports can be obtained with an ``image_transport``
+  republisher.
+* ``launch/rectify_test.launch`` and ``launch/slam_rtabmap.launch`` (ROS 1 nodelet launch files), and
+  ``K4AROSDeviceParams::Help()``.
+
+Fixed
+^^^^^
+
+* A rare crash inside ``get_next_capture()`` seconds after a recording was rewound with
+  ``recording_loop_enabled``: ``PlaybackSource`` now opens the recording again instead of seeking. It
+  happened in about 3 of 14 runs of 30 s, and in 2 of 68 after the change.
+* ``K4AROSDevice`` no longer leaked an ``ImageTransport`` nor created a second ``shared_ptr`` control
+  block from ``this``; the running flag and the clock offset are atomic.
+* Exceptions escaping the camera, IMU and body threads no longer call ``std::terminate``: the thread body
+  is logged and restarted. This also removes an abort seen when stopping the node.
+* The node exits with an error code when no device or recording can be opened or the configuration is
+  invalid, instead of staying idle or aborting in the destructor, and a zero or invalid
+  ``imu_rate_target`` no longer divides by zero.
+* The ROS time stays monotonic when a recording is played in a loop.
+* ``getBodyMarker()`` used ``rclcpp::Duration(0.25)``, which does not compile; the body tracking code was
+  ported to ``k4a_driver_body_tracking.cpp`` with ``Duration::from_seconds(0.25)``, but it is only built
+  with the Body Tracking SDK, which was not available, so it was not compiled.
+* ``driver.launch.py`` writes the generated URDF to a temporary directory instead of the install space.

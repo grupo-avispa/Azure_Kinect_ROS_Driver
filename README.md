@@ -16,8 +16,11 @@ This ROS node outputs a variety of sensor data, including:
 - Rectified color Images in the depth camera resolution
 - The IMU sensor stream
 - A TF2 model representing the extrinsic calibration of the camera
+- The temperature of the IMU and the health of the driver on `/diagnostics`
 
 The camera is fully configurable using a variety of options which can be specified in ROS launch files or on the command line.
+
+The driver is a lifecycle node and a composable component: it can be started and stopped without ending the process, and when it is composed in a container with intra-process communication enabled the other components of that container receive its images and point clouds without any copy. See the [usage guide](docs/usage.md).
 
 However, this node does ***not*** expose all the sensor data from the Azure Kinect Developer Kit hardware. It does not provide access to:
 
