@@ -89,6 +89,13 @@ class K4AROSDevice : public rclcpp::Node
   // the SDK) instead of letting the exception escape the std::thread and terminate the process.
   void runGuarded(const char * name, void (K4AROSDevice::*thread_body)());
 
+  // Stamps an image and its (cached) camera info with the capture time and publishes both
+  void publishImageWithInfo(image_transport::Publisher & image_publisher,
+                            const sensor_msgs::msg::Image::SharedPtr & image,
+                            rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr & camera_info_publisher,
+                            sensor_msgs::msg::CameraInfo & camera_info, const rclcpp::Time & stamp,
+                            const std::string & frame_id);
+
   void framePublisherThread();
 #if defined(K4A_BODY_TRACKING)
   void bodyPublisherThread();

@@ -896,6 +896,20 @@ k4a_result_t K4AROSDevice::renderBodyIndexMapToROS(
 }
 #endif
 
+void K4AROSDevice::publishImageWithInfo(
+  image_transport::Publisher & image_publisher, const Image::SharedPtr & image,
+  rclcpp::Publisher<CameraInfo>::SharedPtr & camera_info_publisher, CameraInfo & camera_info,
+  const Time & stamp, const std::string & frame_id)
+{
+  // The camera info message is cached, so its stamp has to follow the image
+  image->header.stamp = stamp;
+  image->header.frame_id = frame_id;
+  camera_info.header.stamp = stamp;
+
+  image_publisher.publish(image);
+  camera_info_publisher->publish(camera_info);
+}
+
 void K4AROSDevice::runGuarded(const char * name, void (K4AROSDevice::*thread_body)())
 {
   while (running_ && rclcpp::ok()) {
@@ -1033,14 +1047,9 @@ void K4AROSDevice::framePublisherThread()
         } else {
           capture_time = timestampToROS(capture.get_ir_image().get_device_timestamp());
 
-          // Re-sychronize the timestamps with the capture timestamp
-          ir_raw_camera_info.header.stamp = capture_time;
-          ir_raw_frame->header.stamp = capture_time;
-          ir_raw_frame->header.frame_id = calibration_data_.tf_prefix_ +
-            calibration_data_.depth_camera_frame_;
-
-          ir_raw_publisher_.publish(ir_raw_frame);
-          ir_raw_camerainfo_publisher_->publish(ir_raw_camera_info);
+          publishImageWithInfo(ir_raw_publisher_, ir_raw_frame, ir_raw_camerainfo_publisher_,
+            ir_raw_camera_info, capture_time,
+            calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_);
         }
       }
 
@@ -1063,14 +1072,9 @@ void K4AROSDevice::framePublisherThread()
           } else {
             capture_time = timestampToROS(capture.get_depth_image().get_device_timestamp());
 
-            // Re-sychronize the timestamps with the capture timestamp
-            depth_raw_camera_info.header.stamp = capture_time;
-            depth_raw_frame->header.stamp = capture_time;
-            depth_raw_frame->header.frame_id = calibration_data_.tf_prefix_ +
-              calibration_data_.depth_camera_frame_;
-
-            depth_raw_publisher_.publish(depth_raw_frame);
-            depth_raw_camerainfo_publisher_->publish(depth_raw_camera_info);
+            publishImageWithInfo(depth_raw_publisher_, depth_raw_frame, depth_raw_camerainfo_publisher_,
+              depth_raw_camera_info, capture_time,
+              calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_);
           }
         }
 
@@ -1093,14 +1097,9 @@ void K4AROSDevice::framePublisherThread()
           } else {
             capture_time = timestampToROS(capture.get_depth_image().get_device_timestamp());
 
-            depth_rect_frame->header.stamp = capture_time;
-            depth_rect_frame->header.frame_id = calibration_data_.tf_prefix_ +
-              calibration_data_.rgb_camera_frame_;
-            depth_rect_publisher_.publish(depth_rect_frame);
-
-            // Re-synchronize the header timestamps since we cache the camera calibration message
-            depth_rect_camera_info.header.stamp = capture_time;
-            depth_rect_camerainfo_publisher_->publish(depth_rect_camera_info);
+            publishImageWithInfo(depth_rect_publisher_, depth_rect_frame, depth_rect_camerainfo_publisher_,
+              depth_rect_camera_info, capture_time,
+              calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_);
           }
         }
 
@@ -1163,14 +1162,9 @@ void K4AROSDevice::framePublisherThread()
           } else {
             capture_time = timestampToROS(capture.get_color_image().get_device_timestamp());
 
-            rgb_raw_frame->header.stamp = capture_time;
-            rgb_raw_frame->header.frame_id = calibration_data_.tf_prefix_ +
-              calibration_data_.rgb_camera_frame_;
-            rgb_raw_publisher_.publish(rgb_raw_frame);
-
-            // Re-synchronize the header timestamps since we cache the camera calibration message
-            rgb_raw_camera_info.header.stamp = capture_time;
-            rgb_raw_camerainfo_publisher_->publish(rgb_raw_camera_info);
+            publishImageWithInfo(rgb_raw_publisher_, rgb_raw_frame, rgb_raw_camerainfo_publisher_,
+              rgb_raw_camera_info, capture_time,
+              calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_);
           }
         }
 
@@ -1190,18 +1184,13 @@ void K4AROSDevice::framePublisherThread()
           if (result != K4A_RESULT_SUCCEEDED) {
             iteration_failed = true;
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-              "Failed to get rectifed depth frame, skipping it");
+              "Failed to get rectified RGB frame, skipping it");
           } else {
             capture_time = timestampToROS(capture.get_color_image().get_device_timestamp());
 
-            rgb_rect_frame->header.stamp = capture_time;
-            rgb_rect_frame->header.frame_id = calibration_data_.tf_prefix_ +
-              calibration_data_.depth_camera_frame_;
-            rgb_rect_publisher_.publish(rgb_rect_frame);
-
-            // Re-synchronize the header timestamps since we cache the camera calibration message
-            rgb_rect_camera_info.header.stamp = capture_time;
-            rgb_rect_camerainfo_publisher_->publish(rgb_rect_camera_info);
+            publishImageWithInfo(rgb_rect_publisher_, rgb_rect_frame, rgb_rect_camerainfo_publisher_,
+              rgb_rect_camera_info, capture_time,
+              calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_);
           }
         }
       }
@@ -1303,7 +1292,6 @@ void K4AROSDevice::bodyPublisherThread()
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
               "Failed to get body index map, skipping it");
           } else {
-            // Re-sychronize the timestamps with the capture timestamp
             body_index_map_frame->header.stamp = capture_time;
             body_index_map_frame->header.frame_id =
               calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_;
