@@ -846,10 +846,10 @@ void K4AROSDevice::framePublisherThread()
         if (params_.depth_enabled) {
           // Update the timestamp offset based on the difference between the system timestamp (i.e., arrival at USB bus)
           // and device timestamp (i.e., hardware clock at exposure start).
-          updateTimestampOffset(capture.get_ir_image().get_device_timestamp(),
+          updateClock(capture.get_ir_image().get_device_timestamp(),
                                 capture.get_ir_image().get_system_timestamp());
         } else if (params_.color_enabled) {
-          updateTimestampOffset(capture.get_color_image().get_device_timestamp(),
+          updateClock(capture.get_color_image().get_device_timestamp(),
                                 capture.get_color_image().get_system_timestamp());
         }
       }
@@ -865,15 +865,11 @@ void K4AROSDevice::framePublisherThread()
           imu_stream_end_of_file_ = false;
           last_imu_time_usec_ = 0;
 
-          // The device timestamps restart from the beginning of the recording. Shift the offset
-          // so the first frame of the new loop is stamped one frame period after the last frame
-          // of the previous one, keeping the ROS time monotonic.
-          const int64_t frame_period_ns = 1000000000LL / params_.fps;
-          const int64_t last_stamp_ns =
-            static_cast<int64_t>(last_capture_time_usec_.load()) * 1000 +
-            device_to_realtime_offset_ns_.load();
-          const int64_t first_device_ns = getCaptureTimestamp(capture).count() * 1000;
-          device_to_realtime_offset_ns_.store(last_stamp_ns + frame_period_ns - first_device_ns);
+          // The device timestamps restart from the beginning of the recording; keep the ROS time
+          // moving forward
+          clock_.continueAfterRestart(
+            std::chrono::microseconds(last_capture_time_usec_.load()), getCaptureTimestamp(capture),
+            std::chrono::nanoseconds(1000000000LL / params_.fps));
         } else {
           RCLCPP_INFO(this->get_logger(), "Recording reached end of file. node cannot continue.");
           rclcpp::shutdown();
@@ -1260,14 +1256,14 @@ std::chrono::microseconds K4AROSDevice::getCaptureTimestamp(const k4a::capture &
 rclcpp::Time K4AROSDevice::timestampToROS(const std::chrono::microseconds & k4a_timestamp_us)
 {
   // This will give INCORRECT timestamps until the first image.
-  if (device_to_realtime_offset_ns_.load() == 0) {
-    initializeTimestampOffset(k4a_timestamp_us);
+  if (!clock_.synchronized()) {
+    const std::chrono::nanoseconds offset = clock_.initializeFromWallClock(k4a_timestamp_us);
+    RCLCPP_WARN_STREAM(this->get_logger(),
+      "Initializing the device to realtime offset based on wall clock: " << offset.count() <<
+        " ns");
   }
 
-  std::chrono::nanoseconds timestamp_in_realtime =
-    k4a_timestamp_us + std::chrono::nanoseconds(device_to_realtime_offset_ns_.load());
-  rclcpp::Time ros_time(timestamp_in_realtime.count(), RCL_ROS_TIME);
-  return ros_time;
+  return rclcpp::Time(clock_.toRealtime(k4a_timestamp_us).count(), RCL_ROS_TIME);
 }
 
 // Converts a k4a_imu_sample_t timestamp to a ros::Time object
@@ -1276,56 +1272,15 @@ rclcpp::Time K4AROSDevice::timestampToROS(const uint64_t & k4a_timestamp_us)
   return timestampToROS(std::chrono::microseconds(k4a_timestamp_us));
 }
 
-void K4AROSDevice::initializeTimestampOffset(
-  const std::chrono::microseconds & k4a_device_timestamp_us)
-{
-  // We have no better guess than "now".
-  std::chrono::nanoseconds realtime_clock = std::chrono::system_clock::now().time_since_epoch();
-
-  const int64_t offset_ns = (realtime_clock - k4a_device_timestamp_us).count();
-  device_to_realtime_offset_ns_.store(offset_ns);
-
-  RCLCPP_WARN_STREAM(this->get_logger(),
-    "Initializing the device to realtime offset based on wall clock: " << offset_ns << " ns");
-}
-
-void K4AROSDevice::updateTimestampOffset(
+void K4AROSDevice::updateClock(
   const std::chrono::microseconds & k4a_device_timestamp_us,
   const std::chrono::nanoseconds & k4a_system_timestamp_ns)
 {
-  // System timestamp is on monotonic system clock.
-  // Device time is on AKDK hardware clock.
-  // We want to continuously estimate diff between realtime and AKDK hardware clock as low-pass offset.
-  // This consists of two parts: device to monotonic, and monotonic to realtime.
-
-  // First figure out realtime to monotonic offset. This will change to keep updating it.
-  std::chrono::nanoseconds realtime_clock = std::chrono::system_clock::now().time_since_epoch();
-  std::chrono::nanoseconds monotonic_clock = std::chrono::steady_clock::now().time_since_epoch();
-
-  std::chrono::nanoseconds monotonic_to_realtime = realtime_clock - monotonic_clock;
-
-  // Next figure out the other part (combined).
-  std::chrono::nanoseconds device_to_realtime =
-    k4a_system_timestamp_ns - k4a_device_timestamp_us + monotonic_to_realtime;
-  // If the new measurement is further than this from the filtered estimate, treat it as a clock
-  // step and snap into place instead of low-pass filtering it.
-  constexpr std::chrono::nanoseconds kClockSnapThreshold = std::chrono::milliseconds(10);
-  const std::chrono::nanoseconds current_offset(device_to_realtime_offset_ns_.load());
-  if (current_offset.count() == 0 ||
-    std::abs((current_offset - device_to_realtime).count()) > kClockSnapThreshold.count())
+  if (clock_.update(k4a_device_timestamp_us, k4a_system_timestamp_ns) ==
+    azure_kinect_ros_driver::ClockSynchronizer::UpdateResult::kSnapped)
   {
     RCLCPP_WARN_STREAM(this->get_logger(),
-      "Initializing or re-initializing the device to realtime offset: "               <<
-      device_to_realtime.count()
-                                                                                      <<
-      " ns");
-    device_to_realtime_offset_ns_.store(device_to_realtime.count());
-  } else {
-    // Low-pass filter!
-    constexpr double alpha = 0.10;
-    const std::chrono::nanoseconds filtered = current_offset +
-      std::chrono::nanoseconds(static_cast<int64_t>(
-          std::floor(alpha * (device_to_realtime - current_offset).count())));
-    device_to_realtime_offset_ns_.store(filtered.count());
+      "Initializing or re-initializing the device to realtime offset: " <<
+        clock_.toRealtime(std::chrono::microseconds(0)).count() << " ns");
   }
 }

@@ -31,6 +31,7 @@
 
 // Project headers
 //
+#include "azure_kinect_ros_driver/clock_synchronizer.h"
 #include "azure_kinect_ros_driver/k4a_calibration_transform_data.h"
 #include "azure_kinect_ros_driver/k4a_ros_device_params.h"
 
@@ -112,14 +113,9 @@ class K4AROSDevice : public rclcpp::Node
   // Converts a k4a_imu_sample_t timestamp to a ros::Time object
   rclcpp::Time timestampToROS(const uint64_t& k4a_timestamp_us);
 
-  // Updates the timestamp offset (stored as start_time_) between the device time and ROS time.
-  // This is a low-pass filtered update based on the system time from k4a, which represents the
-  // time the message arrived at the USB bus.
-  void updateTimestampOffset(const std::chrono::microseconds& k4a_device_timestamp_us,
-                             const std::chrono::nanoseconds& k4a_system_timestamp_ns);
-  // Make an initial guess based on wall clock. The best we can do when no image timestamps are
-  // available.
-  void initializeTimestampOffset(const std::chrono::microseconds& k4a_device_timestamp_us);
+  // Folds the arrival time of an image into the estimate of the device-to-realtime clock offset
+  void updateClock(const std::chrono::microseconds& k4a_device_timestamp_us,
+                   const std::chrono::nanoseconds& k4a_system_timestamp_ns);
 
   // Converts an IMU sample to a message and publishes it
   void publishImuSample(const k4a_imu_sample_t& sample);
@@ -171,9 +167,8 @@ class K4AROSDevice : public rclcpp::Node
   std::thread body_publisher_thread_;
 #endif
 
-  // Offset between the device clock and the realtime clock, in nanoseconds. Written by the frame
-  // thread and read by the frame and IMU threads.
-  std::atomic<int64_t> device_to_realtime_offset_ns_{0};
+  // Maps the device timestamps to the realtime clock
+  azure_kinect_ros_driver::ClockSynchronizer clock_;
 
   // Thread control
   std::atomic_bool running_{false};

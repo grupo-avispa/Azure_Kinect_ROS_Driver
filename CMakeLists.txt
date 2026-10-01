@@ -77,6 +77,7 @@ include(Installk4a)
 ## linked by both the node and the tests.
 add_library(${PROJECT_NAME}_core STATIC
   src/k4a_conversions.cpp
+  src/clock_synchronizer.cpp
   )
 set_target_properties(${PROJECT_NAME}_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(${PROJECT_NAME}_core PUBLIC
@@ -139,6 +140,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_conversions test/test_conversions.cpp)
   target_link_libraries(test_conversions ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_clock_synchronizer test/test_clock_synchronizer.cpp)
+  target_link_libraries(test_clock_synchronizer ${PROJECT_NAME}_core)
 endif()
 
 ament_package()
