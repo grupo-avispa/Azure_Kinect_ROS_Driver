@@ -159,10 +159,12 @@ class K4AROSDevice : public rclcpp::Node
   std::thread body_publisher_thread_;
 #endif
 
-  std::chrono::nanoseconds device_to_realtime_offset_{0};
+  // Offset between the device clock and the realtime clock, in nanoseconds. Written by the frame
+  // thread and read by the frame and IMU threads.
+  std::atomic<int64_t> device_to_realtime_offset_ns_{0};
 
   // Thread control
-  volatile bool running_;
+  std::atomic_bool running_{false};
 
   // Last capture timestamp for synchronizing playback capture and imu thread
   std::atomic_uint64_t last_capture_time_usec_;

@@ -1369,11 +1369,12 @@ std::chrono::microseconds K4AROSDevice::getCaptureTimestamp(const k4a::capture &
 rclcpp::Time K4AROSDevice::timestampToROS(const std::chrono::microseconds & k4a_timestamp_us)
 {
   // This will give INCORRECT timestamps until the first image.
-  if (device_to_realtime_offset_.count() == 0) {
+  if (device_to_realtime_offset_ns_.load() == 0) {
     initializeTimestampOffset(k4a_timestamp_us);
   }
 
-  std::chrono::nanoseconds timestamp_in_realtime = k4a_timestamp_us + device_to_realtime_offset_;
+  std::chrono::nanoseconds timestamp_in_realtime =
+    k4a_timestamp_us + std::chrono::nanoseconds(device_to_realtime_offset_ns_.load());
   rclcpp::Time ros_time(timestamp_in_realtime.count(), RCL_ROS_TIME);
   return ros_time;
 }
@@ -1390,11 +1391,11 @@ void K4AROSDevice::initializeTimestampOffset(
   // We have no better guess than "now".
   std::chrono::nanoseconds realtime_clock = std::chrono::system_clock::now().time_since_epoch();
 
-  device_to_realtime_offset_ = realtime_clock - k4a_device_timestamp_us;
+  const int64_t offset_ns = (realtime_clock - k4a_device_timestamp_us).count();
+  device_to_realtime_offset_ns_.store(offset_ns);
 
   RCLCPP_WARN_STREAM(this->get_logger(),
-    "Initializing the device to realtime offset based on wall clock: "
-                  << device_to_realtime_offset_.count() << " ns");
+    "Initializing the device to realtime offset based on wall clock: " << offset_ns << " ns");
 }
 
 void K4AROSDevice::updateTimestampOffset(
@@ -1416,20 +1417,22 @@ void K4AROSDevice::updateTimestampOffset(
   std::chrono::nanoseconds device_to_realtime =
     k4a_system_timestamp_ns - k4a_device_timestamp_us + monotonic_to_realtime;
   // If we're over a second off, just snap into place.
-  if (device_to_realtime_offset_.count() == 0 ||
-    std::abs((device_to_realtime_offset_ - device_to_realtime).count()) > 1e7)
+  const std::chrono::nanoseconds current_offset(device_to_realtime_offset_ns_.load());
+  if (current_offset.count() == 0 ||
+    std::abs((current_offset - device_to_realtime).count()) > 1e7)
   {
     RCLCPP_WARN_STREAM(this->get_logger(),
       "Initializing or re-initializing the device to realtime offset: "               <<
       device_to_realtime.count()
                                                                                       <<
       " ns");
-    device_to_realtime_offset_ = device_to_realtime;
+    device_to_realtime_offset_ns_.store(device_to_realtime.count());
   } else {
     // Low-pass filter!
     constexpr double alpha = 0.10;
-    device_to_realtime_offset_ = device_to_realtime_offset_ +
+    const std::chrono::nanoseconds filtered = current_offset +
       std::chrono::nanoseconds(static_cast<int64_t>(
-          std::floor(alpha * (device_to_realtime - device_to_realtime_offset_).count())));
+          std::floor(alpha * (device_to_realtime - current_offset).count())));
+    device_to_realtime_offset_ns_.store(filtered.count());
   }
 }
