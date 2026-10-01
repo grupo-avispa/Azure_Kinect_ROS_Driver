@@ -1198,7 +1198,13 @@ void K4AROSDevice::framePublisherThread()
     }
 
     rclcpp::spin_some(shared_from_this());
-    loop_rate.sleep();
+
+    // With a device, get_capture() already blocks until the next frame arrives. Sleeping on top
+    // of that adds up to a frame period of latency and lets captures queue up in the SDK. The
+    // recording has no such pacing, so it still needs the rate limiter.
+    if (!k4a_device_) {
+      loop_rate.sleep();
+    }
   }
 }
 
