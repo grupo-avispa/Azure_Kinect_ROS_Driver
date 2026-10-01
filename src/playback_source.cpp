@@ -103,6 +103,7 @@ PlaybackSource::PlaybackSource(K4AROSDeviceParams& params, rclcpp::Logger logger
         record_config.color_format != K4A_IMAGE_FORMAT_COLOR_BGRA32)
     {
       playback_.set_color_conversion(K4A_IMAGE_FORMAT_COLOR_BGRA32);
+      convert_color_ = true;
     }
   }
 
@@ -161,8 +162,16 @@ CaptureSource::Status PlaybackSource::nextCapture(k4a::capture& capture,
         return Status::kEndOfStream;
       }
 
-      // Rewind the recording
-      playback_.seek_timestamp(std::chrono::microseconds(0), K4A_PLAYBACK_SEEK_BEGIN);
+      // Start the recording again. It is opened anew instead of seeking to its beginning,
+      // because seeking leaves the reader of the SDK in a state that corrupts its memory a
+      // moment later (a crash inside `get_next_capture()` seconds after the rewind). The
+      // previous capture is released first, as its images point into the old reader.
+      capture.reset();
+      playback_ = k4a::playback::open(path_.c_str());
+      if (convert_color_)
+      {
+        playback_.set_color_conversion(K4A_IMAGE_FORMAT_COLOR_BGRA32);
+      }
       playback_.get_next_capture(&capture);
       imu_stream_end_of_file_ = false;
       last_imu_time_usec_ = 0;

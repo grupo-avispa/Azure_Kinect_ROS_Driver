@@ -68,6 +68,9 @@ private:
   /** @brief Time between two captures. */
   std::chrono::nanoseconds frame_period_;
 
+  /** @brief Whether the color images have to be converted to BGRA when reading. */
+  bool convert_color_ = false;
+
   /** @brief The open recording. */
   k4a::playback playback_;
 
