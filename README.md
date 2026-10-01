@@ -27,6 +27,8 @@ For more information about how to use the node, please see the [usage guide](doc
 
 ## Status
 
+This fork is tested with ROS 2 Jazzy on Ubuntu 24.04 (aarch64) and Azure Kinect Sensor SDK 1.4. The CI configuration under `.github/` and `azure-pipelines.yml` still targets older distributions and is not run against this branch.
+
 This code is provided as a starting point for using the Azure Kinect Developer Kit with ROS. Community developed features are welcome.
 
 For information on how to contribute, please see our [contributing guide](CONTRIBUTING.md).

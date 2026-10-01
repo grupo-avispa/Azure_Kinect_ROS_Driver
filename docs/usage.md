@@ -18,15 +18,17 @@ Windows 10 platform:
 c:\opt\ros\foxy\x64\setup.bat
 rviz2
 ```
-Ubuntu 20.04 platform:
+Ubuntu platform:
 ```
-source /opt/ros/foxy/setup.bash
+source /opt/ros/jazzy/setup.bash
 rviz2
 ```
 
 Once Rviz2 launches change "Fixed Frame" to "camera_body". Visualize the image streams outputted by the driver by adding the topics to Rviz2.
 
 ### Parameters
+
+The driver is a single ROS node named `k4a_ros_device_node`.
 
 The Azure Kinect ROS Driver node accepts a number of [ROS Parameters](http://wiki.ros.org/Parameter%20Server) to configure the Azure Kinect DK sensor. Since the node uses the ROS parameter server, these parameters can be set in the usual ROS ways (on the command line, in a launch file, through the parameter server, etc..).
 
@@ -35,11 +37,14 @@ The node accepts the following parameters:
 - `sensor_sn` (string) : No default value. The serial number of the Azure Kinect DK that the node should open. If this parameter is not specified, the node will auto-select the first Azure Kinect DK that it finds.
 - `depth_enabled` (bool) : Default to '`true`'. Controls if the depth camera will be turned on.
 - `depth_mode` (string) : Defaults to '`NFOV_UNBINNED`'. This string selects the depth camera operating mode. More details on the various depth camera modes can be found in the [Azure Kinect Sensor SDK documentation](https://docs.microsoft.com/en-us/azure/Kinect-dk/hardware-specification#depth-camera-supported-operating-modes). Valid options are '`NFOV_2X2BINNED`', '`NFOV_UNBINNED`', '`WFOV_2X2BINNED`', '`WFOV_UNBINNED`', '`PASSIVE_IR`'.
+- `depth_unit` (string) : Defaults to '`16UC1`'. Encoding of `depth/image_raw` and `depth_to_rgb/image_raw`. Valid options are '`16UC1`' (16 bit integer, millimetres) and '`32FC1`' (32 bit float, metres).
 - `color_enabled` (bool) : Defaults to '`false`'. Controls if the color camera will be turned on.
+- `color_format` (string) : Defaults to '`bgra`'. Format of the color camera images. Valid options are '`bgra`' (raw images on `rgb/image_raw`) and '`jpeg`' (compressed images on `rgb/image_raw/compressed`). The RGB point cloud and the `rgb_to_depth` stream require '`bgra`'.
 - `color_resolution` (string) : Defaults to '`720P`'. This string selects the color camera resolution. The selected color camera resolution will affect the overlap between the depth and color camera field-of-view, which will impact the quality / resolution of the depth-to-color and color-to-depth point clouds. More details on the various color-camera resolutions and their aspect ratios can be found in the [Azure Kinect Sensor SDK documentation](https://docs.microsoft.com/en-us/azure/Kinect-dk/hardware-specification#color-camera-supported-operating-modes). Valid options are '`720P`', '`1080P`', '`1440P`', '`1536P`', '`2160P`', '`3072P`'.
 - `fps` (int) : Defaults to `5`. This parameter controls the FPS of the color and depth cameras. The cameras cannot operate at different frame rates. Valid options are `5`, `15`, `30`. Note that some FPS values are not compatible with high color camera resolutions or depth camera resolutions. For more information, see the [Azure Kinect Sensor SDK documentation](https://docs.microsoft.com/en-us/azure/Kinect-dk/hardware-specification#depth-camera-supported-operating-modes).
 - `point_cloud` (bool) : Defaults to `true`. If this parameter is set to `true`, the node will generate a sensor_msgs::PointCloud2 message from the depth camera data. This requires that the `depth_enabled` parameter be `true`.
 - `rgb_point_cloud` (bool) : Defaults to `false`. If this parameter is set to `true`, the node will generate a sensor_msgs::PointCloud2 message from the depth camera data and colorize it using the color camera data. This requires that the `point_cloud` parameter be `true`, and the `color_enabled` parameter be `true`.
+- `tf_prefix` (string) : Defaults to an empty string. Prefix prepended to the name of every TF frame published by the node (for example `k4a_` gives `k4a_depth_camera_link`), which allows running several cameras.
 - `point_cloud_in_depth_frame` (bool) : Defaults to `true`. Whether the RGB pointcloud is rendered in the depth frame (true) or RGB frame (false). Will either match the resolution of the depth camera (true) or the RGB camera (false).
 - `recording_file` (string) : No default value. If this parameter contains a valid absolute path to a k4arecording file, the node will use the playback api with this file instead of opening a device.
 - `recording_loop_enabled` (bool) : Defaults to `false`. If this parameter is set to `true`, the node will rewind the recording file to the beginning after reaching the last frame. Otherwise the node will stop working after reaching the end of the recording file.
@@ -62,12 +67,12 @@ Some example incompatibilities are provided here:
 
 ## Topics
 
-The node emits a variety of topics into its namespace.
+The node emits a variety of topics into its namespace. Only the streams that the configuration can produce are advertised (for example, nothing related to the color camera when `color_enabled` is `false`), and a stream is only computed while something subscribes to it or to its `camera_info`. The image topics also publish through every `image_transport` plugin that is installed (`compressed`, ...).
 
 - `points2` (`sensor_msgs::PointCloud2`) : The point cloud generated by the Azure Kinect Sensor SDK from the depth camera data. If the `rgb_point_cloud` option is set, the points in the cloud will be colorized using information from the color camera.
-- `rgb/image_raw` (`sensor_msgs::Image`) : The raw image from the color camera, in BGRA format. Note that this image is **not** undistorted. The image can be undistorted using the [image_proc package](http://wiki.ros.org/image_proc).
+- `rgb/image_raw` (`sensor_msgs::Image`) : The raw image from the color camera, in BGRA format (only with `color_format` set to `bgra`; with `jpeg` the images are published on `rgb/image_raw/compressed` instead). Note that this image is **not** undistorted. The image can be undistorted using the [image_proc package](http://wiki.ros.org/image_proc).
 - `rgb/camera_info` (`sensor_msgs::CameraInfo`) : Calibration information for the color camera, converted from the Azure Kinect Sensor SDK format. The Azure Kinect DK uses the `rational_polynomial` distortion model.
-- `depth/image_raw` (`sensor_msgs::Image`) : The raw image from the depth camera, in 32FC1 format. This differs from previous ROS Kinect drivers, which emitted data in the Kinect-native MONO16 format in units of millimeters. Note that this image is **not** undistorted. The image can be undistorted using the [image_proc package](http://wiki.ros.org/image_proc).
+- `depth/image_raw` (`sensor_msgs::Image`) : The raw image from the depth camera. By default it is in 16UC1 format (16 bit integers in millimeters, the Kinect-native units); set `depth_unit` to `32FC1` to get 32 bit floats in meters. Note that this image is **not** undistorted. The image can be undistorted using the [image_proc package](http://wiki.ros.org/image_proc).
 - `depth/camera_info` (`sensor_msgs::CameraInfo`) : Calibration information for the depth camera, converted from the Azure Kinect Sensor SDK format. The Azure Kinect DK uses the `rational_polynomial` distortion model.
 - `depth_to_rgb/image_raw` (`sensor_msgs::Image`) :  The depth image, transformed into the color camera co-ordinate space by the Azure Kinect Sensor SDK. This image has been resized to match the color image resolution. Note that since the depth image is now transformed into the color camera co-ordinate space, some depth information may have been discarded if it was not visible to the depth camera.
 - `depth_to_rgb/camera_info` (`sensor_msgs::CameraInfo`) : A copy of the color camera calibration which has been modified to match the depth co-ordinate frame. The depth camera image provided by `depth_to_rgb/image_raw` is distorted in the same way as the color camera image provided by `rgb/image_raw`. Correctly undistorting this image require the use of the color camera calibration, which is provided on this topic.
@@ -86,3 +91,8 @@ Unlike previous ROS Kinect drivers, the Azure Kinect ROS Driver provides calibra
 
 - tf2 : The relative offsets of the cameras and IMU are loaded from the Azure Kinect DK extrinsics calibration information. The various co-ordinate frames published by the node to TF2 are based on the calibration data. Please note that the calibration information only provides the relative positions of the IMU, color and depth cameras. It does not provide the offset between the sensors and the mechanical housing of the camera. The transform between the `camera_base` frame and `depth_camera_link` frame are based on the mechanical specifications of the Azure Kinect DK, and are not corrected by calibration.
 - sensor_msgs::CameraInfo : Intrinsics calibration data for the cameras is converted into a ROS-compatible format. Fully populated CameraInfo messages are published for both the depth and color cameras, allowing ROS to undistort the images using image_proc and project them into point clouds using depth_image_proc. Using the point cloud functions in this node will provide GPU-accelerated results, but the same quality point clouds can be produced using standard ROS tools.
+
+## Troubleshooting
+
+- The depth engine needs an OpenGL context. Started from a terminal without a graphical session, for example over SSH, the node can fail with `Depth engine create and initialize failed with error code: 204` and then abort with `Failed to start cameras!`. On the Jetson this driver was tested on, running `export DISPLAY=:0` before starting the node fixes it.
+- If no camera can be opened, or the configuration is invalid, the node logs the reason and exits with a non-zero code instead of staying idle.

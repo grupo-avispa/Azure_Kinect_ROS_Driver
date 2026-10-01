@@ -18,7 +18,7 @@ If you are using Ubuntu 20.04 the provided installation instructions will have t
 
 The Azure Kinect ROS Driver includes CMake files which will try to locate the Azure Kinect Sensor SDK. Installing the SDK in a non-default location will result in compile failures when CMake is unable to locate the SDK.
 
-The Azure Kinect ROS Driver requires version of v1.1.0 of the Azure Kinect Sensor SDK to compile.
+The Azure Kinect ROS Driver requires version 1.3.0 or later of the Azure Kinect Sensor SDK to compile (`find_package(k4a 1.3.0)` in `CMakeLists.txt`). The Azure Kinect Body Tracking SDK is optional: when it is found, body tracking support is compiled in; otherwise the build prints a notice and continues without it.
 
 #### Alternate SDK Installation
 
@@ -39,7 +39,7 @@ For more information, please consult the [Azure Kinect Sensor SDK usage guide](h
 
 Once the Azure Kinect Sensor SDK has been installed, the ROS node can be built using `colcon build`. Please note that you may need to run `colcon build --force-cmake-configure` to update the SDK binaries which are copied into the ROS output folders.
 
-#### Windows 10 platform:
+#### Windows 10 platform (not tested in this fork):
 Open a terminal and navigate to your workspace:
 ```
 c:\opt\ros\foxy\x64\setup.bat
@@ -49,17 +49,16 @@ cd Azure_Kinect_ROS_Driver
 colcon build 
 install\setup.bat
 ```
-#### Ubuntu 20.04 platform:
+#### Ubuntu platform (tested with ROS 2 Jazzy on Ubuntu 24.04):
 Open a terminal and navigate to your workspace:
 ```
-source /opt/ros/foxy/setup.bash
-git clone https://github.com/microsoft/Azure_Kinect_ROS_Driver.git -b foxy-devel
-pip3 install xacro
-sudo apt install ros-foxy-joint-state-publisher
-cd Azure_Kinect_ROS_Driver
-colcon build 
+source /opt/ros/jazzy/setup.bash
+git clone https://github.com/grupo-avispa/Azure_Kinect_ROS_Driver.git -b jazzy src/Azure_Kinect_ROS_Driver
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --packages-select azure_kinect_ros_driver
 source install/setup.bash
 ```
 
 ## Troubleshooting 
 - If you are having trouble verfying Azure Kinect image streams using the k4aviewer, [try updating the drivers for your graphics card.](https://github.com/microsoft/Azure-Kinect-Sensor-SDK/issues/918). 
+- When running over SSH or without a graphical session, the depth engine can fail with error code 204; see the troubleshooting section of the [usage guide](usage.md).
