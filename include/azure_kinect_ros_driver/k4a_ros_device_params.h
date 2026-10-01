@@ -92,6 +92,11 @@ public:
   // Get a device configuration from a a set of parameters
   k4a_result_t GetDeviceConfig(k4a_device_configuration_t* configuration);
 
+  // Check the target IMU rate and replace the "maximum rate" request (0) by IMU_MAX_RATE, so
+  // that `imu_rate_target` is always safe to divide by afterwards. Independent of the device
+  // configuration, since the IMU thread runs both with a device and with a recording.
+  k4a_result_t ValidateImuRate();
+
   // Print help messages to the console
   void Help();
 

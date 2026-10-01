@@ -310,6 +310,11 @@ k4a_result_t K4AROSDevice::startCameras()
   k4a_device_configuration_t k4a_configuration = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
   k4a_result_t result = params_.GetDeviceConfig(&k4a_configuration);
 
+  if (params_.ValidateImuRate() != K4A_RESULT_SUCCEEDED) {
+    RCLCPP_ERROR(this->get_logger(), "Invalid IMU rate. Not starting camera!");
+    return K4A_RESULT_FAILED;
+  }
+
   if (!k4a_device_ && !k4a_playback_handle_) {
     RCLCPP_ERROR(this->get_logger(),
       "Neither a K4A device nor a recording is open. Not starting camera!");

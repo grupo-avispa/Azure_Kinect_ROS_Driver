@@ -197,6 +197,11 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
     return K4A_RESULT_FAILED;
   }
 
+  return K4A_RESULT_SUCCEEDED;
+}
+
+k4a_result_t K4AROSDeviceParams::ValidateImuRate()
+{
   // Ensure that target IMU rate is feasible
   if (imu_rate_target == 0)
   {
@@ -206,7 +211,7 @@ k4a_result_t K4AROSDeviceParams::GetDeviceConfig(k4a_device_configuration_t* con
 
   if (imu_rate_target < 0 || imu_rate_target > IMU_MAX_RATE)
   {
-    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: desired IMU rate of " << imu_rate_target << "is not supported.");
+    RCLCPP_ERROR_STREAM(this->get_logger(),"Incompatible options: desired IMU rate of " << imu_rate_target << " is not supported.");
     return K4A_RESULT_FAILED;
   }
 
