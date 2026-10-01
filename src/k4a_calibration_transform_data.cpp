@@ -161,46 +161,35 @@ void K4ACalibrationTransformData::printExtrinsics(k4a_calibration_extrinsics_t& 
 
 void K4ACalibrationTransformData::publishRgbToDepthTf()
 {
-  k4a_calibration_extrinsics_t* rgb_extrinsics =
-      &k4a_calibration_.extrinsics[K4A_CALIBRATION_TYPE_DEPTH][K4A_CALIBRATION_TYPE_COLOR];
-  tf2::Vector3 depth_to_rgb_translation(rgb_extrinsics->translation[0] / 1000.0f,
-                                        rgb_extrinsics->translation[1] / 1000.0f,
-                                        rgb_extrinsics->translation[2] / 1000.0f);
-  tf2::Matrix3x3 depth_to_rgb_rotation(
-      rgb_extrinsics->rotation[0], rgb_extrinsics->rotation[1], rgb_extrinsics->rotation[2],
-      rgb_extrinsics->rotation[3], rgb_extrinsics->rotation[4], rgb_extrinsics->rotation[5],
-      rgb_extrinsics->rotation[6], rgb_extrinsics->rotation[7], rgb_extrinsics->rotation[8]);
-  tf2::Transform depth_to_rgb_transform(depth_to_rgb_rotation, depth_to_rgb_translation);
-
-  geometry_msgs::msg::TransformStamped static_transform;
-  static_transform.transform = tf2::toMsg(depth_to_rgb_transform.inverse());
-
-  static_transform.header.stamp = this->get_clock()->now();
-  static_transform.header.frame_id = tf_prefix_ + depth_camera_frame_;
-  static_transform.child_frame_id = tf_prefix_ + rgb_camera_frame_;
-
-  static_broadcaster_->sendTransform(static_transform);
+  publishDepthToSensorTf(K4A_CALIBRATION_TYPE_COLOR, rgb_camera_frame_);
 }
 
 void K4ACalibrationTransformData::publishImuToDepthTf()
 {
-  k4a_calibration_extrinsics_t* imu_extrinsics =
-      &k4a_calibration_.extrinsics[K4A_CALIBRATION_TYPE_DEPTH][K4A_CALIBRATION_TYPE_ACCEL];
-  tf2::Vector3 depth_to_imu_translation(imu_extrinsics->translation[0] / 1000.0f,
-                                        imu_extrinsics->translation[1] / 1000.0f,
-                                        imu_extrinsics->translation[2] / 1000.0f);
-  tf2::Matrix3x3 depth_to_imu_rotation(
-      imu_extrinsics->rotation[0], imu_extrinsics->rotation[1], imu_extrinsics->rotation[2],
-      imu_extrinsics->rotation[3], imu_extrinsics->rotation[4], imu_extrinsics->rotation[5],
-      imu_extrinsics->rotation[6], imu_extrinsics->rotation[7], imu_extrinsics->rotation[8]);
-  tf2::Transform depth_to_imu_transform(depth_to_imu_rotation, depth_to_imu_translation);
+  publishDepthToSensorTf(K4A_CALIBRATION_TYPE_ACCEL, imu_frame_);
+}
+
+void K4ACalibrationTransformData::publishDepthToSensorTf(k4a_calibration_type_t sensor,
+                                                         const std::string& sensor_frame)
+{
+  // The SDK extrinsics transform points from the depth camera into the sensor frame, while TF
+  // needs the pose of the sensor frame expressed in the depth camera frame: the inverse.
+  const k4a_calibration_extrinsics_t& extrinsics = k4a_calibration_.extrinsics[K4A_CALIBRATION_TYPE_DEPTH][sensor];
+  tf2::Vector3 depth_to_sensor_translation(extrinsics.translation[0] / 1000.0f,
+                                           extrinsics.translation[1] / 1000.0f,
+                                           extrinsics.translation[2] / 1000.0f);
+  tf2::Matrix3x3 depth_to_sensor_rotation(
+      extrinsics.rotation[0], extrinsics.rotation[1], extrinsics.rotation[2],
+      extrinsics.rotation[3], extrinsics.rotation[4], extrinsics.rotation[5],
+      extrinsics.rotation[6], extrinsics.rotation[7], extrinsics.rotation[8]);
+  tf2::Transform depth_to_sensor_transform(depth_to_sensor_rotation, depth_to_sensor_translation);
 
   geometry_msgs::msg::TransformStamped static_transform;
-  static_transform.transform = tf2::toMsg(depth_to_imu_transform.inverse());
+  static_transform.transform = tf2::toMsg(depth_to_sensor_transform.inverse());
 
   static_transform.header.stamp = this->get_clock()->now();
   static_transform.header.frame_id = tf_prefix_ + depth_camera_frame_;
-  static_transform.child_frame_id = tf_prefix_ + imu_frame_;
+  static_transform.child_frame_id = tf_prefix_ + sensor_frame;
 
   static_broadcaster_->sendTransform(static_transform);
 }
@@ -258,64 +247,24 @@ tf2::Quaternion K4ACalibrationTransformData::getDepthToBaseRotationCorrection()
 
 void K4ACalibrationTransformData::getDepthCameraInfo(sensor_msgs::msg::CameraInfo& camera_info)
 {
-  camera_info.header.frame_id = tf_prefix_ + depth_camera_frame_;
-  camera_info.width = getDepthWidth();
-  camera_info.height = getDepthHeight();
-  camera_info.distortion_model = sensor_msgs::distortion_models::RATIONAL_POLYNOMIAL;
-
-  k4a_calibration_intrinsic_parameters_t* parameters = &k4a_calibration_.depth_camera_calibration.intrinsics.parameters;
-
-  // The distortion parameters, size depending on the distortion model.
-  // For "rational_polynomial", the 8 parameters are: (k1, k2, p1, p2, k3, k4, k5, k6).
-  camera_info.d = {parameters->param.k1, parameters->param.k2, parameters->param.p1, parameters->param.p2,
-                   parameters->param.k3, parameters->param.k4, parameters->param.k5, parameters->param.k6};
-
-  // clang-format off
-  // Intrinsic camera matrix for the raw (distorted) images.
-  //     [fx  0 cx]
-  // K = [ 0 fy cy]
-  //     [ 0  0  1]
-  // Projects 3D points in the camera coordinate frame to 2D pixel
-  // coordinates using the focal lengths (fx, fy) and principal point
-  // (cx, cy).
-  camera_info.k = {parameters->param.fx,  0.0f,                   parameters->param.cx,
-                   0.0f,                  parameters->param.fy,   parameters->param.cy,
-                   0.0f,                  0.0,                    1.0f};
-
-  // Projection/camera matrix
-  //     [fx'  0  cx' Tx]
-  // P = [ 0  fy' cy' Ty]
-  //     [ 0   0   1   0]
-  // By convention, this matrix specifies the intrinsic (camera) matrix
-  //  of the processed (rectified) image. That is, the left 3x3 portion
-  //  is the normal camera intrinsic matrix for the rectified image.
-  // It projects 3D points in the camera coordinate frame to 2D pixel
-  //  coordinates using the focal lengths (fx', fy') and principal point
-  //  (cx', cy') - these may differ from the values in K.
-  // For monocular cameras, Tx = Ty = 0. Normally, monocular cameras will
-  //  also have R = the identity and P[1:3,1:3] = K.
-  camera_info.p = {parameters->param.fx,  0.0f,                   parameters->param.cx,   0.0f,
-                   0.0f,                  parameters->param.fy,   parameters->param.cy,   0.0f,
-                   0.0f,                  0.0,                    1.0f,                   0.0f};
-
-  // Rectification matrix (stereo cameras only)
-  // A rotation matrix aligning the camera coordinate system to the ideal
-  // stereo image plane so that epipolar lines in both stereo images are
-  // parallel.
-  camera_info.r = {1.0f, 0.0f, 0.0f,
-                   0.0f, 1.0f, 0.0f,
-                   0.0f, 0.0f, 1.0f};
-  // clang-format on
+  fillCameraInfo(k4a_calibration_.depth_camera_calibration, tf_prefix_ + depth_camera_frame_, camera_info);
 }
 
 void K4ACalibrationTransformData::getRgbCameraInfo(sensor_msgs::msg::CameraInfo& camera_info)
 {
-  camera_info.header.frame_id = tf_prefix_ + rgb_camera_frame_;
-  camera_info.width = getColorWidth();
-  camera_info.height = getColorHeight();
+  fillCameraInfo(k4a_calibration_.color_camera_calibration, tf_prefix_ + rgb_camera_frame_, camera_info);
+}
+
+void K4ACalibrationTransformData::fillCameraInfo(const k4a_calibration_camera_t& calibration,
+                                                 const std::string& frame_id,
+                                                 sensor_msgs::msg::CameraInfo& camera_info)
+{
+  camera_info.header.frame_id = frame_id;
+  camera_info.width = calibration.resolution_width;
+  camera_info.height = calibration.resolution_height;
   camera_info.distortion_model = sensor_msgs::distortion_models::RATIONAL_POLYNOMIAL;
 
-  k4a_calibration_intrinsic_parameters_t* parameters = &k4a_calibration_.color_camera_calibration.intrinsics.parameters;
+  const k4a_calibration_intrinsic_parameters_t* parameters = &calibration.intrinsics.parameters;
 
   // The distortion parameters, size depending on the distortion model.
   // For "rational_polynomial", the 8 parameters are: (k1, k2, p1, p2, k3, k4, k5, k6).

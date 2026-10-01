@@ -64,6 +64,13 @@ private:
   void publishImuToDepthTf();
   void publishDepthToBaseTf();
 
+  // Publishes the static transform from the depth camera frame to the frame of another sensor
+  void publishDepthToSensorTf(k4a_calibration_type_t sensor, const std::string& sensor_frame);
+
+  // Fills a CameraInfo from the intrinsics of one of the cameras
+  static void fillCameraInfo(const k4a_calibration_camera_t& calibration, const std::string& frame_id,
+                             sensor_msgs::msg::CameraInfo& camera_info);
+
   tf2::Quaternion getDepthToBaseRotationCorrection();
   tf2::Vector3 getDepthToBaseTranslationCorrection();
 
