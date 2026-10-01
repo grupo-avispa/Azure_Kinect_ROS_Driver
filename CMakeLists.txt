@@ -30,38 +30,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)
 find_package(angles REQUIRED)
-
-###########
-## Build ##
-###########
-
-
-## Declare a C++ executable
-add_executable(${PROJECT_NAME}_node
-  src/k4a_ros_bridge_node.cpp
-  src/k4a_ros_device.cpp
-  src/k4a_ros_device_params.cpp
-  src/k4a_calibration_transform_data.cpp
-  )
-
-ament_target_dependencies(${PROJECT_NAME}_node rclcpp 
-  std_msgs 
-  sensor_msgs
-  visualization_msgs
-  image_transport
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  cv_bridge
-  angles)
-
-## Rename C++ executable without prefix
-## The above recommended prefix causes long target names, the following renames the
-## target back to the shorter version for ease of user use
-## e.g. "rosrun someones_pkg node" instead of "rosrun someones_pkg someones_pkg_node"
-set_target_properties(${PROJECT_NAME}_node PROPERTIES OUTPUT_NAME node PREFIX "")
 
 ############################
 #### AZURE KINECT SDK ######
@@ -87,7 +56,7 @@ find_package(k4abt 1.0.0 QUIET MODULE)
 if (k4abt_FOUND)
   list(APPEND K4A_LIBS k4abt::k4abt)
   message(STATUS "Body Tracking SDK found: compiling support for Body Tracking")
-  target_compile_definitions(${PROJECT_NAME}_node PUBLIC K4A_BODY_TRACKING)
+  set(K4A_BODY_TRACKING_ENABLED TRUE)
 else()
   message("!!! Body Tracking SDK not found: body tracking features will not be available !!!")
 endif()
@@ -99,18 +68,54 @@ include(Installk4a)
 ##################################
 ###### END AZURE KINECT SDK ######
 ##################################
+
+###########
+## Build ##
+###########
+
+## Everything that does not need a running node lives in this library, so that it can be
+## linked by both the node and the tests.
+add_library(${PROJECT_NAME}_core STATIC
+  src/k4a_conversions.cpp
+  )
+set_target_properties(${PROJECT_NAME}_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(${PROJECT_NAME}_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+ament_target_dependencies(${PROJECT_NAME}_core PUBLIC sensor_msgs)
+target_link_libraries(${PROJECT_NAME}_core PUBLIC ${K4A_LIBS})
+if(K4A_BODY_TRACKING_ENABLED)
+  target_compile_definitions(${PROJECT_NAME}_core PUBLIC K4A_BODY_TRACKING)
+endif()
+
+## Declare a C++ executable
+add_executable(${PROJECT_NAME}_node
+  src/k4a_ros_bridge_node.cpp
+  src/k4a_ros_device.cpp
+  src/k4a_ros_device_params.cpp
+  src/k4a_calibration_transform_data.cpp
+  )
 target_include_directories(${PROJECT_NAME}_node PRIVATE include)
 
-target_link_libraries(${PROJECT_NAME}_node
-  ${K4A_LIBS}
-)
+ament_target_dependencies(${PROJECT_NAME}_node rclcpp
+  std_msgs
+  sensor_msgs
+  visualization_msgs
+  image_transport
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  angles)
+target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_core)
+
+## Rename C++ executable without prefix
+## The above recommended prefix causes long target names, the following renames the
+## target back to the shorter version for ease of user use
+## e.g. "rosrun someones_pkg node" instead of "rosrun someones_pkg someones_pkg_node"
+set_target_properties(${PROJECT_NAME}_node PROPERTIES OUTPUT_NAME node PREFIX "")
 
 #############
 ## Install ##
 #############
-
-# all install targets should use catkin DESTINATION variables
-# See http://ros.org/doc/api/catkin/html/adv_user_guide/variables.html
 
 ## Mark executables and/or libraries for installation
 install(TARGETS ${PROJECT_NAME}_node
@@ -124,5 +129,16 @@ install(
   urdf
   DESTINATION share/${PROJECT_NAME}/
 )
+
+###########
+## Tests ##
+###########
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_conversions test/test_conversions.cpp)
+  target_link_libraries(test_conversions ${PROJECT_NAME}_core)
+endif()
 
 ament_package()

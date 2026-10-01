@@ -22,6 +22,7 @@
 
 // Project headers
 //
+#include "azure_kinect_ros_driver/k4a_conversions.h"
 #include "azure_kinect_ros_driver/k4a_ros_types.h"
 K4ACalibrationTransformData::K4ACalibrationTransformData(rclcpp::Node* node) : node_(node)
 {
@@ -250,64 +251,12 @@ tf2::Quaternion K4ACalibrationTransformData::getDepthToBaseRotationCorrection()
 
 void K4ACalibrationTransformData::getDepthCameraInfo(sensor_msgs::msg::CameraInfo& camera_info)
 {
-  fillCameraInfo(k4a_calibration_.depth_camera_calibration, tf_prefix_ + depth_camera_frame_, camera_info);
+  camera_info = azure_kinect_ros_driver::conversions::cameraInfoFromCalibration(
+      k4a_calibration_.depth_camera_calibration, tf_prefix_ + depth_camera_frame_);
 }
 
 void K4ACalibrationTransformData::getRgbCameraInfo(sensor_msgs::msg::CameraInfo& camera_info)
 {
-  fillCameraInfo(k4a_calibration_.color_camera_calibration, tf_prefix_ + rgb_camera_frame_, camera_info);
-}
-
-void K4ACalibrationTransformData::fillCameraInfo(const k4a_calibration_camera_t& calibration,
-                                                 const std::string& frame_id,
-                                                 sensor_msgs::msg::CameraInfo& camera_info)
-{
-  camera_info.header.frame_id = frame_id;
-  camera_info.width = calibration.resolution_width;
-  camera_info.height = calibration.resolution_height;
-  camera_info.distortion_model = sensor_msgs::distortion_models::RATIONAL_POLYNOMIAL;
-
-  const k4a_calibration_intrinsic_parameters_t* parameters = &calibration.intrinsics.parameters;
-
-  // The distortion parameters, size depending on the distortion model.
-  // For "rational_polynomial", the 8 parameters are: (k1, k2, p1, p2, k3, k4, k5, k6).
-  camera_info.d = {parameters->param.k1, parameters->param.k2, parameters->param.p1, parameters->param.p2,
-                   parameters->param.k3, parameters->param.k4, parameters->param.k5, parameters->param.k6};
-
-  // clang-format off
-  // Intrinsic camera matrix for the raw (distorted) images.
-  //     [fx  0 cx]
-  // K = [ 0 fy cy]
-  //     [ 0  0  1]
-  // Projects 3D points in the camera coordinate frame to 2D pixel
-  // coordinates using the focal lengths (fx, fy) and principal point
-  // (cx, cy).
-  camera_info.k = {parameters->param.fx,  0.0f,                   parameters->param.cx,
-                   0.0f,                  parameters->param.fy,   parameters->param.cy,
-                   0.0f,                  0.0,                    1.0f};
-
-  // Projection/camera matrix
-  //     [fx'  0  cx' Tx]
-  // P = [ 0  fy' cy' Ty]
-  //     [ 0   0   1   0]
-  // By convention, this matrix specifies the intrinsic (camera) matrix
-  //  of the processed (rectified) image. That is, the left 3x3 portion
-  //  is the normal camera intrinsic matrix for the rectified image.
-  // It projects 3D points in the camera coordinate frame to 2D pixel
-  //  coordinates using the focal lengths (fx', fy') and principal point
-  //  (cx', cy') - these may differ from the values in K.
-  // For monocular cameras, Tx = Ty = 0. Normally, monocular cameras will
-  //  also have R = the identity and P[1:3,1:3] = K.
-  camera_info.p = {parameters->param.fx,  0.0f,                   parameters->param.cx,   0.0f,
-                   0.0f,                  parameters->param.fy,   parameters->param.cy,   0.0f,
-                   0.0f,                  0.0,                    1.0f,                   0.0f};
-
-  // Rectification matrix (stereo cameras only)
-  // A rotation matrix aligning the camera coordinate system to the ideal
-  // stereo image plane so that epipolar lines in both stereo images are
-  // parallel.
-  camera_info.r = {1.0f, 0.0f, 0.0f,
-                   0.0f, 1.0f, 0.0f,
-                   0.0f, 0.0f, 1.0f};
-  // clang-format on
+  camera_info = azure_kinect_ros_driver::conversions::cameraInfoFromCalibration(
+      k4a_calibration_.color_camera_calibration, tf_prefix_ + rgb_camera_frame_);
 }

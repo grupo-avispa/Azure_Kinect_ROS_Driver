@@ -81,9 +81,10 @@ class K4AROSDevice : public rclcpp::Node
   k4a_result_t renderDepthToROS(std::shared_ptr<sensor_msgs::msg::Image>& depth_image, k4a::image& k4a_depth_frame);
   k4a_result_t renderIrToROS(std::shared_ptr<sensor_msgs::msg::Image>& ir_image, k4a::image& k4a_ir_frame);
 
-  k4a_result_t fillPointCloud(const k4a::image& pointcloud_image, std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud);
-  k4a_result_t fillColorPointCloud(const k4a::image& pointcloud_image, const k4a::image& color_image,
-                                   std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud);
+  // Converts a point cloud image, optionally with a color image, and fills its header
+  k4a_result_t buildPointCloud(const k4a::image& pointcloud_image, const k4a::image* color_image,
+                               const std::string& frame_id, const k4a::image& depth_image,
+                               std::shared_ptr<sensor_msgs::msg::PointCloud2>& point_cloud);
 
   // Runs a publisher thread body, logging and restarting it if it throws (e.g. a k4a::error from
   // the SDK) instead of letting the exception escape the std::thread and terminate the process.

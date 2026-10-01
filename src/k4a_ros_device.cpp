@@ -17,7 +17,6 @@
 // Library headers
 //
 #include <angles/angles.h>
-#include <cv_bridge/cv_bridge.hpp>
 #include <k4a/k4a.h>
 #include <sensor_msgs/distortion_models.hpp>
 #include <sensor_msgs/image_encodings.hpp>
@@ -26,6 +25,7 @@
 
 // Project headers
 //
+#include "azure_kinect_ros_driver/k4a_conversions.h"
 #include "azure_kinect_ros_driver/k4a_ros_types.h"
 
 using namespace rclcpp;
@@ -41,81 +41,6 @@ namespace
 {
 // Consecutive captures that may fail to render before the node gives up
 constexpr int kMaxConsecutiveFrameFailures = 30;
-
-// Sets the layout of a point cloud message with the size of the SDK point cloud image
-void initPointCloud(
-  const k4a::image & pointcloud_image,
-  std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud, bool with_color)
-{
-  point_cloud->height = pointcloud_image.get_height_pixels();
-  point_cloud->width = pointcloud_image.get_width_pixels();
-  point_cloud->is_dense = false;
-  point_cloud->is_bigendian = false;
-
-  sensor_msgs::PointCloud2Modifier pcd_modifier(*point_cloud);
-  if (with_color) {
-    pcd_modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
-  } else {
-    pcd_modifier.setPointCloud2FieldsByString(1, "xyz");
-  }
-  pcd_modifier.resize(point_cloud->height * point_cloud->width);
-}
-
-// Placeholder for the color iterators of a point cloud that has no color
-struct NoColorIterator
-{
-  NoColorIterator(sensor_msgs::msg::PointCloud2 &, const std::string &) {}
-  NoColorIterator & operator++() {return *this;}
-};
-
-// Fills the points of an already sized cloud from the SDK point cloud image (x, y, z in
-// millimetres) and, if requested, from a BGRA image. Invalid points become NaN.
-template<bool kWithColor>
-void fillPoints(
-  sensor_msgs::msg::PointCloud2 & cloud, const int16_t * point_cloud_buffer,
-  const uint8_t * color_buffer, size_t point_count)
-{
-  using ColorIterator = std::conditional_t<kWithColor,
-      sensor_msgs::PointCloud2Iterator<uint8_t>, NoColorIterator>;
-
-  sensor_msgs::PointCloud2Iterator<float> iter_x(cloud, "x");
-  sensor_msgs::PointCloud2Iterator<float> iter_y(cloud, "y");
-  sensor_msgs::PointCloud2Iterator<float> iter_z(cloud, "z");
-  ColorIterator iter_r(cloud, "r");
-  ColorIterator iter_g(cloud, "g");
-  ColorIterator iter_b(cloud, "b");
-
-  constexpr float kMillimeterToMeter = 1.0 / 1000.0f;
-
-  for (size_t i = 0; i < point_count;
-    i++, ++iter_x, ++iter_y, ++iter_z, ++iter_r, ++iter_g, ++iter_b)
-  {
-    // Z in image frame:
-    float z = static_cast<float>(point_cloud_buffer[3 * i + 2]);
-
-    bool valid = z > 0.0f;
-    if constexpr (kWithColor) {
-      // Alpha value:
-      valid = valid && color_buffer[4 * i + 3] != 0;
-    }
-
-    if (!valid) {
-      *iter_x = *iter_y = *iter_z = std::numeric_limits<float>::quiet_NaN();
-      if constexpr (kWithColor) {
-        *iter_r = *iter_g = *iter_b = 0;
-      }
-    } else {
-      *iter_x = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 0]);
-      *iter_y = kMillimeterToMeter * static_cast<float>(point_cloud_buffer[3 * i + 1]);
-      *iter_z = kMillimeterToMeter * z;
-      if constexpr (kWithColor) {
-        *iter_r = color_buffer[4 * i + 2];
-        *iter_g = color_buffer[4 * i + 1];
-        *iter_b = color_buffer[4 * i + 0];
-      }
-    }
-  }
-}
 
 // Number of subscribers of a publisher that may not have been created (disabled stream)
 template<typename PublisherT>
@@ -534,28 +459,15 @@ k4a_result_t K4AROSDevice::renderDepthToROS(
   std::shared_ptr<sensor_msgs::msg::Image> & depth_image,
   k4a::image & k4a_depth_frame)
 {
-  cv::Mat depth_frame_buffer_mat(k4a_depth_frame.get_height_pixels(),
-    k4a_depth_frame.get_width_pixels(), CV_16UC1,
-    k4a_depth_frame.get_buffer());
-  std::string encoding;
-
-  if (params_.depth_unit == sensor_msgs::image_encodings::TYPE_32FC1) {
-    // convert from 16 bit integer millimetre to 32 bit float metre
-    depth_frame_buffer_mat.convertTo(depth_frame_buffer_mat, CV_32FC1, 1.0 / 1000.0f);
-    encoding = sensor_msgs::image_encodings::TYPE_32FC1;
-  } else if (params_.depth_unit == sensor_msgs::image_encodings::TYPE_16UC1) {
-    // source data is already in 'K4A_IMAGE_FORMAT_DEPTH16' format
-    encoding = sensor_msgs::image_encodings::TYPE_16UC1;
-  } else {
+  azure_kinect_ros_driver::conversions::DepthUnit unit;
+  if (!azure_kinect_ros_driver::conversions::parseDepthUnit(params_.depth_unit, unit)) {
     RCLCPP_ERROR_STREAM_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
       "Invalid depth unit: " << params_.depth_unit);
     return K4A_RESULT_FAILED;
   }
 
-  depth_image =
-    cv_bridge::CvImage(std_msgs::msg::Header(), encoding, depth_frame_buffer_mat).toImageMsg();
-
-  return K4A_RESULT_SUCCEEDED;
+  depth_image = azure_kinect_ros_driver::conversions::depthToImage(k4a_depth_frame, unit);
+  return depth_image ? K4A_RESULT_SUCCEEDED : K4A_RESULT_FAILED;
 }
 
 k4a_result_t K4AROSDevice::getIrFrame(
@@ -576,23 +488,11 @@ k4a_result_t K4AROSDevice::renderIrToROS(
   std::shared_ptr<sensor_msgs::msg::Image> & ir_image,
   k4a::image & k4a_ir_frame)
 {
-  cv::Mat ir_buffer_mat(k4a_ir_frame.get_height_pixels(), k4a_ir_frame.get_width_pixels(), CV_16UC1,
-    k4a_ir_frame.get_buffer());
-
-  // Rescale the image to mono8 for visualization and usage for visual(-inertial) odometry.
-  if (params_.rescale_ir_to_mono8) {
-    cv::Mat new_image(k4a_ir_frame.get_height_pixels(), k4a_ir_frame.get_width_pixels(), CV_8UC1);
-    // Use a scaling factor to re-scale the image. If using the illuminators, a value of 1 is appropriate.
-    // If using PASSIVE_IR, then a value of 10 is more appropriate; k4aviewer does a similar conversion.
-    ir_buffer_mat.convertTo(new_image, CV_8UC1, params_.ir_mono8_scaling_factor);
-    ir_image = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::MONO8,
-      new_image).toImageMsg();
-  } else {
-    ir_image = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::MONO16,
-      ir_buffer_mat).toImageMsg();
-  }
-
-  return K4A_RESULT_SUCCEEDED;
+  // If using the illuminators, a scaling factor of 1 is appropriate. If using PASSIVE_IR, then a
+  // value of 10 is more appropriate; k4aviewer does a similar conversion.
+  ir_image = azure_kinect_ros_driver::conversions::irToImage(k4a_ir_frame, params_.rescale_ir_to_mono8,
+    params_.ir_mono8_scaling_factor);
+  return ir_image ? K4A_RESULT_SUCCEEDED : K4A_RESULT_FAILED;
 }
 
 k4a_result_t K4AROSDevice::getJpegRgbFrame(
@@ -606,10 +506,8 @@ k4a_result_t K4AROSDevice::getJpegRgbFrame(
     return K4A_RESULT_FAILED;
   }
 
-  const uint8_t * jpeg_frame_buffer = k4a_jpeg_frame.get_buffer();
-  jpeg_image->format = "bgra8; jpeg compressed bgr8";
-  jpeg_image->data.assign(jpeg_frame_buffer, jpeg_frame_buffer + k4a_jpeg_frame.get_size());
-  return K4A_RESULT_SUCCEEDED;
+  jpeg_image = azure_kinect_ros_driver::conversions::jpegToCompressed(k4a_jpeg_frame);
+  return jpeg_image ? K4A_RESULT_SUCCEEDED : K4A_RESULT_FAILED;
 }
 
 k4a_result_t K4AROSDevice::getRgbFrame(
@@ -620,16 +518,6 @@ k4a_result_t K4AROSDevice::getRgbFrame(
 
   if (!k4a_bgra_frame) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Cannot render BGRA frame: no frame");
-    return K4A_RESULT_FAILED;
-  }
-
-  size_t color_image_size =
-    static_cast<size_t>(k4a_bgra_frame.get_width_pixels() * k4a_bgra_frame.get_height_pixels()) *
-    sizeof(BgraPixel);
-
-  if (k4a_bgra_frame.get_size() != color_image_size) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-      "Invalid k4a_bgra_frame returned from K4A");
     return K4A_RESULT_FAILED;
   }
 
@@ -647,19 +535,16 @@ k4a_result_t K4AROSDevice::getRgbFrame(
   return renderBGRA32ToROS(rgb_image, k4a_bgra_frame);
 }
 
-// Helper function that renders any BGRA K4A frame to a ROS ImagePtr. Useful for rendering intermediary frames
-// during debugging of image processing functions
 k4a_result_t K4AROSDevice::renderBGRA32ToROS(
   std::shared_ptr<sensor_msgs::msg::Image> & rgb_image,
   k4a::image & k4a_bgra_frame)
 {
-  cv::Mat rgb_buffer_mat(k4a_bgra_frame.get_height_pixels(), k4a_bgra_frame.get_width_pixels(),
-    CV_8UC4,
-    k4a_bgra_frame.get_buffer());
-
-  rgb_image = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::BGRA8,
-    rgb_buffer_mat).toImageMsg();
-
+  rgb_image = azure_kinect_ros_driver::conversions::bgraToImage(k4a_bgra_frame);
+  if (!rgb_image) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Invalid k4a_bgra_frame returned from K4A");
+    return K4A_RESULT_FAILED;
+  }
   return K4A_RESULT_SUCCEEDED;
 }
 
@@ -669,34 +554,30 @@ k4a_result_t K4AROSDevice::getRgbPointCloudInDepthFrame(
 {
   const k4a::image k4a_depth_frame = capture.get_depth_image();
   if (!k4a_depth_frame) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Cannot render RGB point cloud: no depth frame");
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Cannot render RGB point cloud: no depth frame");
     return K4A_RESULT_FAILED;
   }
 
   const k4a::image k4a_bgra_frame = capture.get_color_image();
   if (!k4a_bgra_frame) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Cannot render RGB point cloud: no BGRA frame");
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Cannot render RGB point cloud: no BGRA frame");
     return K4A_RESULT_FAILED;
   }
 
   // Transform color image into the depth camera frame:
   calibration_data_.k4a_transformation_.color_image_to_depth_camera(k4a_depth_frame, k4a_bgra_frame,
-                                                                    &calibration_data_.
-    transformed_rgb_image_);
+    &calibration_data_.transformed_rgb_image_);
 
   // Tranform depth image to point cloud
   calibration_data_.k4a_transformation_.depth_image_to_point_cloud(k4a_depth_frame,
-    K4A_CALIBRATION_TYPE_DEPTH,
-                                                                   &calibration_data_.
-    point_cloud_image_);
+    K4A_CALIBRATION_TYPE_DEPTH, &calibration_data_.point_cloud_image_);
 
-  point_cloud->header.frame_id = calibration_data_.tf_prefix_ +
-    calibration_data_.depth_camera_frame_;
-  point_cloud->header.stamp = timestampToROS(k4a_depth_frame.get_device_timestamp());
-
-  return fillColorPointCloud(calibration_data_.point_cloud_image_,
-    calibration_data_.transformed_rgb_image_,
-                             point_cloud);
+  return buildPointCloud(calibration_data_.point_cloud_image_,
+    &calibration_data_.transformed_rgb_image_,
+    calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_,
+    k4a_depth_frame, point_cloud);
 }
 
 k4a_result_t K4AROSDevice::getRgbPointCloudInRgbFrame(
@@ -705,30 +586,30 @@ k4a_result_t K4AROSDevice::getRgbPointCloudInRgbFrame(
 {
   k4a::image k4a_depth_frame = capture.get_depth_image();
   if (!k4a_depth_frame) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Cannot render RGB point cloud: no depth frame");
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Cannot render RGB point cloud: no depth frame");
     return K4A_RESULT_FAILED;
   }
 
   k4a::image k4a_bgra_frame = capture.get_color_image();
   if (!k4a_bgra_frame) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Cannot render RGB point cloud: no BGRA frame");
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Cannot render RGB point cloud: no BGRA frame");
     return K4A_RESULT_FAILED;
   }
 
   // transform depth image into color camera geometry
   calibration_data_.k4a_transformation_.depth_image_to_color_camera(k4a_depth_frame,
-                                                                    &calibration_data_.
-    transformed_depth_image_);
+    &calibration_data_.transformed_depth_image_);
 
   // Tranform depth image to point cloud (note that this is now from the perspective of the color camera)
   calibration_data_.k4a_transformation_.depth_image_to_point_cloud(
-      calibration_data_.transformed_depth_image_, K4A_CALIBRATION_TYPE_COLOR,
+    calibration_data_.transformed_depth_image_, K4A_CALIBRATION_TYPE_COLOR,
     &calibration_data_.point_cloud_image_);
 
-  point_cloud->header.frame_id = calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_;
-  point_cloud->header.stamp = timestampToROS(k4a_depth_frame.get_device_timestamp());
-
-  return fillColorPointCloud(calibration_data_.point_cloud_image_, k4a_bgra_frame, point_cloud);
+  return buildPointCloud(calibration_data_.point_cloud_image_, &k4a_bgra_frame,
+    calibration_data_.tf_prefix_ + calibration_data_.rgb_camera_frame_, k4a_depth_frame,
+    point_cloud);
 }
 
 k4a_result_t K4AROSDevice::getPointCloud(
@@ -738,54 +619,33 @@ k4a_result_t K4AROSDevice::getPointCloud(
   k4a::image k4a_depth_frame = capture.get_depth_image();
 
   if (!k4a_depth_frame) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Cannot render point cloud: no depth frame");
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+      "Cannot render point cloud: no depth frame");
     return K4A_RESULT_FAILED;
   }
 
-  point_cloud->header.frame_id = calibration_data_.tf_prefix_ +
-    calibration_data_.depth_camera_frame_;
-  point_cloud->header.stamp = timestampToROS(k4a_depth_frame.get_device_timestamp());
-
   // Tranform depth image to point cloud
   calibration_data_.k4a_transformation_.depth_image_to_point_cloud(k4a_depth_frame,
-    K4A_CALIBRATION_TYPE_DEPTH,
-                                                                   &calibration_data_.
-    point_cloud_image_);
+    K4A_CALIBRATION_TYPE_DEPTH, &calibration_data_.point_cloud_image_);
 
-  return fillPointCloud(calibration_data_.point_cloud_image_, point_cloud);
+  return buildPointCloud(calibration_data_.point_cloud_image_, nullptr,
+    calibration_data_.tf_prefix_ + calibration_data_.depth_camera_frame_, k4a_depth_frame,
+    point_cloud);
 }
 
-k4a_result_t K4AROSDevice::fillColorPointCloud(
-  const k4a::image & pointcloud_image, const k4a::image & color_image,
-  std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud)
+k4a_result_t K4AROSDevice::buildPointCloud(
+  const k4a::image & pointcloud_image, const k4a::image * color_image, const std::string & frame_id,
+  const k4a::image & depth_image, std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud)
 {
-  const size_t point_count = pointcloud_image.get_height_pixels() *
-    pointcloud_image.get_width_pixels();
-  const size_t pixel_count = color_image.get_size() / sizeof(BgraPixel);
-  if (point_count != pixel_count) {
+  point_cloud = azure_kinect_ros_driver::conversions::pointCloudToMsg(pointcloud_image, color_image);
+  if (!point_cloud) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
       "Color and depth image sizes do not match!");
     return K4A_RESULT_FAILED;
   }
 
-  initPointCloud(pointcloud_image, point_cloud, true);
-  fillPoints<true>(*point_cloud, reinterpret_cast<const int16_t *>(pointcloud_image.get_buffer()),
-    color_image.get_buffer(), point_count);
-
-  return K4A_RESULT_SUCCEEDED;
-}
-
-k4a_result_t K4AROSDevice::fillPointCloud(
-  const k4a::image & pointcloud_image,
-  std::shared_ptr<sensor_msgs::msg::PointCloud2> & point_cloud)
-{
-  const size_t point_count = pointcloud_image.get_height_pixels() *
-    pointcloud_image.get_width_pixels();
-
-  initPointCloud(pointcloud_image, point_cloud, false);
-  fillPoints<false>(*point_cloud, reinterpret_cast<const int16_t *>(pointcloud_image.get_buffer()),
-    nullptr, point_count);
-
+  point_cloud->header.frame_id = frame_id;
+  point_cloud->header.stamp = timestampToROS(depth_image.get_device_timestamp());
   return K4A_RESULT_SUCCEEDED;
 }
 
