@@ -1346,12 +1346,15 @@ void K4AROSDevice::imuPublisherThread()
 
   while (running_ && rclcpp::ok()) {
     if (k4a_device_) {
-      // IMU messages are delivered in batches at 300 Hz. Drain the queue of IMU messages by
-      // constantly reading until we get a timeout
-      while (k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(0))) {
+      // IMU messages are delivered in batches at 300 Hz. Block until the first one of a batch
+      // arrives (with a timeout so that the thread can notice it has to stop), then drain the
+      // rest of the queue without waiting.
+      bool read = k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(10));
+      while (read) {
         if (throttler.add(sample, output)) {
           publishImuSample(output);
         }
+        read = k4a_device_.get_imu_sample(&sample, std::chrono::milliseconds(0));
       }
     } else if (k4a_playback_handle_) {
       // publish imu messages as long as the imu timestamp is less than the last capture timestamp to catch up to the
@@ -1366,7 +1369,11 @@ void K4AROSDevice::imuPublisherThread()
         }
       }
     }
-    loop_rate.sleep();
+
+    // With a device the blocking read above paces the loop; a recording needs the rate limiter
+    if (!k4a_device_) {
+      loop_rate.sleep();
+    }
   }
 }
 
