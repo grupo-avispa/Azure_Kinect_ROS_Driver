@@ -91,12 +91,22 @@ K4AROSDevice::K4AROSDevice()
   ROS_PARAM_LIST
 #undef LIST_ENTRY
 
+  // Print all parameters
+  RCLCPP_INFO(this->get_logger(), "K4A Parameters:");
+  params_.Print();
+
   if (params_.recording_file != "") {
     RCLCPP_INFO(this->get_logger(), "Node is started in playback mode");
     RCLCPP_INFO_STREAM(this->get_logger(), "Try to open recording file " << params_.recording_file);
 
     // Open recording file and print its length
-    k4a_playback_handle_ = k4a::playback::open(params_.recording_file.c_str());
+    try {
+      k4a_playback_handle_ = k4a::playback::open(params_.recording_file.c_str());
+    } catch (const k4a::error & e) {
+      RCLCPP_ERROR_STREAM(this->get_logger(),
+        "Failed to open recording file " << params_.recording_file << ": " << e.what());
+      return;
+    }
     auto recording_length = k4a_playback_handle_.get_recording_length();
     RCLCPP_INFO_STREAM(this->get_logger(),
       "Successfully openend recording file. Recording is "               <<
@@ -169,10 +179,6 @@ K4AROSDevice::K4AROSDevice()
       }
     }
   } else {
-    // Print all parameters
-    RCLCPP_INFO(this->get_logger(), "K4A Parameters:");
-    params_.Print();
-
     // Setup the K4A device
     uint32_t k4a_device_count = k4a::device::get_installed_count();
 
@@ -968,6 +974,16 @@ void K4AROSDevice::framePublisherThread()
           k4a_playback_handle_.get_next_capture(&capture);
           imu_stream_end_of_file_ = false;
           last_imu_time_usec_ = 0;
+
+          // The device timestamps restart from the beginning of the recording. Shift the offset
+          // so the first frame of the new loop is stamped one frame period after the last frame
+          // of the previous one, keeping the ROS time monotonic.
+          const int64_t frame_period_ns = 1000000000LL / params_.fps;
+          const int64_t last_stamp_ns =
+            static_cast<int64_t>(last_capture_time_usec_.load()) * 1000 +
+            device_to_realtime_offset_ns_.load();
+          const int64_t first_device_ns = getCaptureTimestamp(capture).count() * 1000;
+          device_to_realtime_offset_ns_.store(last_stamp_ns + frame_period_ns - first_device_ns);
         } else {
           RCLCPP_INFO(this->get_logger(), "Recording reached end of file. node cannot continue.");
           rclcpp::shutdown();

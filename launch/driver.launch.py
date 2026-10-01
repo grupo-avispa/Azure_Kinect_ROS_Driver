@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import os
+import tempfile
 import xacro
 from ament_index_python.packages import get_package_share_directory
 
@@ -15,19 +16,17 @@ import launch_ros.actions
 def to_urdf(xacro_path, urdf_path=None):
     """Convert the given xacro file to URDF file.
     * xacro_path -- the path to the xacro file
-    * urdf_path -- the path to the urdf file
+    * urdf_path -- the path to the urdf file (defaults to a new temporary file)
     """
-    # If no URDF path is given, use a temporary file
+    # If no URDF path is given, use a temporary file: the install space may be read-only
     if urdf_path is None:
-        urdf_path = os.path.join(
-            get_package_share_directory("azure_kinect_ros_driver"),
-            "urdf",
-            "azure_kinect.urdf")
+        urdf_path = os.path.join(tempfile.mkdtemp(prefix="azure_kinect_"), "azure_kinect.urdf")
     # open and process file
     doc = xacro.process_file(xacro_path)
     # open the output file
     out = xacro.open_output(urdf_path)
     out.write(doc.toprettyxml(indent='  '))
+    out.close()
 
     return urdf_path  # Return path to the urdf file
 
