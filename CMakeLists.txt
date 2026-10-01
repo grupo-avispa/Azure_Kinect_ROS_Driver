@@ -163,6 +163,12 @@ if(BUILD_TESTING)
   ament_add_gtest(test_params test/test_params.cpp)
   target_link_libraries(test_params ${PROJECT_NAME}_core)
 
+  ament_add_gtest(test_driver_node test/test_driver_node.cpp)
+  target_link_libraries(test_driver_node ${PROJECT_NAME}_component)
+  target_include_directories(test_driver_node PRIVATE test)
+  target_compile_definitions(test_driver_node PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/data")
+
   ament_add_gtest(test_clock_synchronizer test/test_clock_synchronizer.cpp)
   target_link_libraries(test_clock_synchronizer ${PROJECT_NAME}_core)
 endif()
