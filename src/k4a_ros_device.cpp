@@ -34,6 +34,22 @@ using namespace std;
 using namespace visualization_msgs::msg;
 #endif
 
+namespace
+{
+// Number of subscribers of a publisher that may not have been created (disabled stream)
+template<typename PublisherT>
+size_t subscriberCount(const std::shared_ptr<PublisherT> & publisher)
+{
+  return publisher ? publisher->get_subscription_count() : 0;
+}
+
+// An image_transport publisher sums the subscribers of every transport (raw, compressed...)
+size_t subscriberCount(const image_transport::Publisher & publisher)
+{
+  return publisher.getNumSubscribers();
+}
+}  // namespace
+
 K4AROSDevice::K4AROSDevice()
 : Node("k4a_ros_device_node"),
   k4a_device_(nullptr),
@@ -975,8 +991,8 @@ void K4AROSDevice::framePublisherThread()
       // Only create ir frame when we are using a device or we have an ir image.
       // Recordings may not have synchronized captures. For unsynchronized captures without ir image skip ir frame.
 
-      if ((this->count_subscribers("ir/image_raw") > 0 ||
-        this->count_subscribers("ir/camera_info") > 0) &&
+      if ((subscriberCount(ir_raw_publisher_) > 0 ||
+        subscriberCount(ir_raw_camerainfo_publisher_) > 0) &&
         (k4a_device_ || capture.get_ir_image() != nullptr))
       {
         // IR images are available in all depth modes
@@ -1006,8 +1022,8 @@ void K4AROSDevice::framePublisherThread()
         // Recordings may not have synchronized captures. For unsynchronized captures without depth image skip depth
         // frame.
 
-        if ((this->count_subscribers("depth/image_raw") > 0 ||
-          this->count_subscribers("depth/camera_info") > 0) &&
+        if ((subscriberCount(depth_raw_publisher_) > 0 ||
+          subscriberCount(depth_raw_camerainfo_publisher_) > 0) &&
           (k4a_device_ || capture.get_depth_image() != nullptr))
         {
           result = getDepthFrame(capture, depth_raw_frame);
@@ -1036,8 +1052,8 @@ void K4AROSDevice::framePublisherThread()
         // depth frame.
 
         if (params_.color_enabled &&
-          (this->count_subscribers("depth_to_rgb/image_raw") > 0 ||
-          this->count_subscribers("depth_to_rgb/camera_info") > 0) &&
+          (subscriberCount(depth_rect_publisher_) > 0 ||
+          subscriberCount(depth_rect_camerainfo_publisher_) > 0) &&
           (k4a_device_ || capture.get_depth_image() != nullptr))
         {
           result = getDepthFrame(capture, depth_rect_frame, true /* rectified */);
@@ -1063,8 +1079,8 @@ void K4AROSDevice::framePublisherThread()
 #if defined(K4A_BODY_TRACKING)
         // Publish body markers when body tracking is enabled and a depth image is available
         if (params_.body_tracking_enabled && k4abt_tracker_queue_size_ < 3 &&
-          (this->count_subscribers("body_tracking_data") > 0 ||
-          this->count_subscribers("body_index_map/image_raw") > 0))
+          (subscriberCount(body_marker_publisher_) > 0 ||
+          subscriberCount(body_index_map_publisher_) > 0))
         {
           if (!k4abt_tracker_.enqueue_capture(capture)) {
             RCLCPP_ERROR(this->get_logger(), "Error! Add capture to tracker process queue failed!");
@@ -1082,8 +1098,8 @@ void K4AROSDevice::framePublisherThread()
       // Only create rgb frame when we are using a device or we have a color image.
       // Recordings may not have synchronized captures. For unsynchronized captures without color image skip rgb frame.
       if (params_.color_format == "jpeg") {
-        if ((this->count_subscribers("rgb/image_raw/compressed") > 0 ||
-          this->count_subscribers("rgb/camera_info") > 0) &&
+        if ((subscriberCount(rgb_jpeg_publisher_) > 0 ||
+          subscriberCount(rgb_raw_camerainfo_publisher_) > 0) &&
           (k4a_device_ || capture.get_color_image() != nullptr))
         {
           result = getJpegRgbFrame(capture, rgb_jpeg_frame);
@@ -1106,8 +1122,8 @@ void K4AROSDevice::framePublisherThread()
           rgb_raw_camerainfo_publisher_->publish(rgb_raw_camera_info);
         }
       } else if (params_.color_format == "bgra") {
-        if ((this->count_subscribers("rgb/image_raw") > 0 ||
-          this->count_subscribers("rgb/camera_info") > 0) &&
+        if ((subscriberCount(rgb_raw_publisher_) > 0 ||
+          subscriberCount(rgb_raw_camerainfo_publisher_) > 0) &&
           (k4a_device_ || capture.get_color_image() != nullptr))
         {
           result = getRbgFrame(capture, rgb_raw_frame);
@@ -1136,8 +1152,8 @@ void K4AROSDevice::framePublisherThread()
 
         if (params_.depth_enabled &&
           (calibration_data_.k4a_calibration_.depth_mode != K4A_DEPTH_MODE_PASSIVE_IR) &&
-          (this->count_subscribers("rgb_to_depth/image_raw") > 0 ||
-          this->count_subscribers("rgb_to_depth/camera_info") > 0) &&
+          (subscriberCount(rgb_rect_publisher_) > 0 ||
+          subscriberCount(rgb_rect_camerainfo_publisher_) > 0) &&
           (k4a_device_ ||
           (capture.get_color_image() != nullptr && capture.get_depth_image() != nullptr)))
         {
@@ -1166,7 +1182,7 @@ void K4AROSDevice::framePublisherThread()
     // Only create pointcloud when we are using a device or we have a synchronized image.
     // Recordings may not have synchronized captures. In unsynchronized captures skip point cloud.
 
-    if (this->count_subscribers("points2") > 0 &&
+    if (subscriberCount(pointcloud_publisher_) > 0 &&
       (k4a_device_ ||
       (capture.get_color_image() != nullptr && capture.get_depth_image() != nullptr)))
     {
@@ -1223,7 +1239,7 @@ void K4AROSDevice::bodyPublisherThread()
       } else {
         auto capture_time = timestampToROS(body_frame.get_device_timestamp());
 
-        if (this->count_subscribers("body_tracking_data") > 0) {
+        if (subscriberCount(body_marker_publisher_) > 0) {
           // Joint marker array
           MarkerArray::SharedPtr markerArrayPtr(new MarkerArray);
           auto num_bodies = body_frame.get_num_bodies();
@@ -1238,7 +1254,7 @@ void K4AROSDevice::bodyPublisherThread()
           body_marker_publisher_->publish(*markerArrayPtr);
         }
 
-        if (this->count_subscribers("body_index_map/image_raw") > 0) {
+        if (subscriberCount(body_index_map_publisher_) > 0) {
           // Body index map
           Image::SharedPtr body_index_map_frame(new Image);
           auto result = getBodyIndexMap(body_frame, body_index_map_frame);
