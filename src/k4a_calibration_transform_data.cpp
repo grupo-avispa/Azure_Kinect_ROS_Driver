@@ -24,21 +24,34 @@
 //
 #include "azure_kinect_ros_driver/k4a_conversions.h"
 #include "azure_kinect_ros_driver/k4a_ros_types.h"
-K4ACalibrationTransformData::K4ACalibrationTransformData(rclcpp::Node* node) : node_(node)
+K4ACalibrationTransformData::K4ACalibrationTransformData(rclcpp_lifecycle::LifecycleNode* node)
+  : node_(node)
 {
-  static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node_);
+  static_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(*node_);
 }
+
+bool K4ACalibrationTransformData::hasTransformation() const
+{
+  return transformation_created_;
+}
+
 void K4ACalibrationTransformData::initialize(const k4a::calibration& calibration,
                                              const K4AROSDeviceParams& params)
 {
   k4a_calibration_ = calibration;
-  k4a_transformation_ = k4a::transformation(k4a_calibration_);
   tf_prefix_ = params.tf_prefix;
 
   print();
 
   bool depthEnabled = (getDepthWidth() * getDepthHeight() > 0);
   bool colorEnabled = (getColorWidth() * getColorHeight() > 0);
+
+  // The transformation is needed to build point clouds and to change the geometry of the images
+  transformation_created_ = params.point_cloud || (depthEnabled && colorEnabled);
+  if (transformation_created_)
+  {
+    k4a_transformation_ = k4a::transformation(k4a_calibration_);
+  }
 
   // Create a buffer to store the point cloud
   if (params.point_cloud && (!params.rgb_point_cloud || params.point_cloud_in_depth_frame))

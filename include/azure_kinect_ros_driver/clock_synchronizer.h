@@ -70,6 +70,11 @@ public:
   bool synchronized() const;
 
   /**
+   * @brief Forgets the offset, as if the synchronizer had just been created.
+   */
+  void reset();
+
+  /**
    * @brief Sets a first guess of the offset from the current wall clock.
    *
    * It is the best that can be done before the first image arrives; `update()` replaces it.

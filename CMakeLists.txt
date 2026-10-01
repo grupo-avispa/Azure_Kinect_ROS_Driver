@@ -22,10 +22,12 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
-find_package(image_transport REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -92,24 +94,32 @@ if(K4A_BODY_TRACKING_ENABLED)
   target_compile_definitions(${PROJECT_NAME}_core PUBLIC K4A_BODY_TRACKING)
 endif()
 
-## Declare a C++ executable
-add_executable(${PROJECT_NAME}_node
-  src/k4a_ros_bridge_node.cpp
-  src/k4a_ros_device.cpp
+## The driver node, a managed node that can be composed in a container
+add_library(${PROJECT_NAME}_component SHARED
+  src/k4a_driver_node.cpp
+  src/k4a_driver_streams.cpp
+  src/k4a_driver_body_tracking.cpp
   src/k4a_calibration_transform_data.cpp
   )
-target_include_directories(${PROJECT_NAME}_node PRIVATE include)
-
-ament_target_dependencies(${PROJECT_NAME}_node rclcpp
+target_link_libraries(${PROJECT_NAME}_component PUBLIC ${PROJECT_NAME}_core)
+ament_target_dependencies(${PROJECT_NAME}_component PUBLIC
+  rclcpp
+  rclcpp_components
+  rclcpp_lifecycle
+  lifecycle_msgs
   std_msgs
   sensor_msgs
   visualization_msgs
-  image_transport
   tf2
   tf2_ros
   tf2_geometry_msgs
+  geometry_msgs
   angles)
-target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_core)
+rclcpp_components_register_nodes(${PROJECT_NAME}_component "azure_kinect_ros_driver::K4ADriverNode")
+
+## The driver as a standalone process
+add_executable(${PROJECT_NAME}_node src/k4a_driver_main.cpp)
+target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_component)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -120,6 +130,12 @@ set_target_properties(${PROJECT_NAME}_node PROPERTIES OUTPUT_NAME node PREFIX ""
 #############
 ## Install ##
 #############
+
+install(TARGETS ${PROJECT_NAME}_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
 
 ## Mark executables and/or libraries for installation
 install(TARGETS ${PROJECT_NAME}_node

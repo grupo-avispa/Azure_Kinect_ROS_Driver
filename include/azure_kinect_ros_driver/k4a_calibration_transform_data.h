@@ -13,6 +13,7 @@
 #include <k4a/k4a.h>
 #include <k4a/k4a.hpp>
 #include "rclcpp/rclcpp.hpp"
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -27,7 +28,7 @@ class K4ACalibrationTransformData
 {
 public:
   // The node provides the logger, the clock and the transform broadcaster. It must outlive this object.
-  explicit K4ACalibrationTransformData(rclcpp::Node* node);
+  explicit K4ACalibrationTransformData(rclcpp_lifecycle::LifecycleNode* node);
   void initialize(const k4a::calibration& calibration, const K4AROSDeviceParams& params);
   int getDepthWidth();
   int getDepthHeight();
@@ -37,12 +38,20 @@ public:
   void getRgbCameraInfo(sensor_msgs::msg::CameraInfo& camera_info);
   void print();
 
+  // Whether the SDK transformation was created, which the streams that change the geometry of an
+  // image or build a point cloud need
+  bool hasTransformation() const;
+
   k4a::calibration k4a_calibration_;
   k4a::transformation k4a_transformation_;
 
   k4a::image point_cloud_image_;
   k4a::image transformed_rgb_image_;
   k4a::image transformed_depth_image_;
+
+  // The transformation is only created if some stream needs it, because it needs a graphical
+  // context for the depth engine
+  bool transformation_created_ = false;
 
   std::string tf_prefix_ = "";
   std::string camera_base_frame_ = "camera_base";
@@ -64,7 +73,7 @@ private:
   tf2::Quaternion getDepthToBaseRotationCorrection();
   tf2::Vector3 getDepthToBaseTranslationCorrection();
 
-  rclcpp::Node* node_;
+  rclcpp_lifecycle::LifecycleNode* node_;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
 };
 

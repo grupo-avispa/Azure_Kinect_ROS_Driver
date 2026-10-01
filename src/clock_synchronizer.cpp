@@ -29,6 +29,11 @@ bool ClockSynchronizer::synchronized() const
   return offset_ns_.load() != 0;
 }
 
+void ClockSynchronizer::reset()
+{
+  offset_ns_.store(0);
+}
+
 std::chrono::nanoseconds ClockSynchronizer::initializeFromWallClock(
   std::chrono::microseconds device_timestamp)
 {

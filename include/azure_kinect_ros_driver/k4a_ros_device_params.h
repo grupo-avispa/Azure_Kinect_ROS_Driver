@@ -82,7 +82,15 @@
               int, 0)                                                                                                  \
   LIST_ENTRY(subordinate_delay_off_master_usec,                                                                        \
               "Delay subordinate camera off master camera by specified amount in usec.",                               \
-              int, 0)
+              int, 0)                                                                                                  \
+  LIST_ENTRY(autostart,                                                                                                \
+             "Configure and activate the node as soon as it is created. Set to false to drive it with "              \
+             "lifecycle transitions.",                                                                                \
+             bool, true)                                                                                              \
+  LIST_ENTRY(shutdown_on_stop,                                                                                         \
+             "Shut the whole process down when the node stops by itself, because the recording ended or "            \
+             "an error happened. For a standalone process; leave it false when composed in a container.",            \
+             bool, false)
 
 class K4AROSDeviceParams
 {
